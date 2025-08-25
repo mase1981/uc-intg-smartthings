@@ -13,11 +13,11 @@ from ucapi import IntegrationAPI
 from ucapi.api_definitions import Events, DeviceStates, SetupDriver
 import ucapi.api_definitions as uc
 
-# Direct imports without package prefix - PyInstaller compatible
-from client import SmartThingsClient
-from entities import SmartThingsEntityFactory
-from setup_flow import SmartThingsSetupFlow
-from config import ConfigManager
+# Absolute imports based on the package structure
+from uc_intg_smartthings.client import SmartThingsClient
+from uc_intg_smartthings.entities import SmartThingsEntityFactory
+from uc_intg_smartthings.setup_flow import SmartThingsSetupFlow
+from uc_intg_smartthings.config import ConfigManager
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 _LOG = logging.getLogger(__name__)

@@ -1,5 +1,5 @@
 """
-Enhanced SmartThings API client with improved reliability and connection handling.
+Enhanced SmartThings API client with improved reliability and SSL handling.
 
 :copyright: (c) 2025 by Meir Miyara
 :license: MPL-2.0, see LICENSE for more details
@@ -8,9 +8,11 @@ Enhanced SmartThings API client with improved reliability and connection handlin
 import asyncio
 import json
 import logging
+import ssl
 import time
 from typing import Any, Dict, List, Optional, Set
 import aiohttp
+import certifi
 from pydantic import BaseModel, Field
 
 _LOG = logging.getLogger(__name__)
@@ -158,15 +160,32 @@ class SmartThingsClient:
         self._cache_hits = 0
         self._connection_errors = 0
 
+    def _create_ssl_context(self) -> ssl.SSLContext:
+        """Create SSL context with proper certificate verification for UC Remote."""
+        try:
+            # Create SSL context with certifi certificates
+            ssl_context = ssl.create_default_context(cafile=certifi.where())
+            ssl_context.check_hostname = True
+            ssl_context.verify_mode = ssl.CERT_REQUIRED
+            return ssl_context
+        except Exception as e:
+            _LOG.warning(f"Failed to create SSL context with certifi: {e}")
+            # Fallback to default context
+            return ssl.create_default_context()
+
     async def __aenter__(self):
         if not self._session or self._session.closed:
+            # Create SSL context for proper certificate verification
+            ssl_context = self._create_ssl_context()
+            
             connector = aiohttp.TCPConnector(
                 limit=self._connection_pool_limit,
                 limit_per_host=5,
                 ttl_dns_cache=300,
                 use_dns_cache=True,
                 keepalive_timeout=30,
-                enable_cleanup_closed=True
+                enable_cleanup_closed=True,
+                ssl=ssl_context  # Use proper SSL context
             )
             
             timeout = aiohttp.ClientTimeout(

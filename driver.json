@@ -1,6 +1,10 @@
 {
   "driver_id": "smartthings",
+<<<<<<< Updated upstream
   "version": "1.0.8",
+=======
+  "version": "1.0.11",
+>>>>>>> Stashed changes
   "min_core_api": "0.21.0",
   "name": {
     "en": "SmartThings"

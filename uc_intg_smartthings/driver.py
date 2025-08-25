@@ -1,5 +1,4 @@
 """
-SmartThings Integration Driver for Unfolded Circle Remote 2/3
 
 :copyright: (c) 2025 by Meir Miyara
 :license: MPL-2.0, see LICENSE for more details.
@@ -13,11 +12,18 @@ from ucapi import IntegrationAPI
 from ucapi.api_definitions import Events, DeviceStates, SetupDriver
 import ucapi.api_definitions as uc
 
+<<<<<<< Updated upstream
 # Direct imports without package prefix - PyInstaller compatible
 from client import SmartThingsClient
 from entities import SmartThingsEntityFactory
 from setup_flow import SmartThingsSetupFlow
 from config import ConfigManager
+=======
+from uc_intg_smartthings.client import SmartThingsClient
+from uc_intg_smartthings.entities import SmartThingsEntityFactory
+from uc_intg_smartthings.setup_flow import SmartThingsSetupFlow
+from uc_intg_smartthings.config import ConfigManager
+>>>>>>> Stashed changes
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 _LOG = logging.getLogger(__name__)
@@ -36,7 +42,7 @@ class SmartThingsIntegration:
         
         self.entity_last_poll = {}
         self.entity_last_change = {}
-        self.entity_last_command = {}
+        self.entity_last_command = {}  # ⚡ Track user commands for priority
         self.subscribed_entities = set()
         self.polling_active = False
         
@@ -86,6 +92,8 @@ class SmartThingsIntegration:
 
             self.client = SmartThingsClient(access_token)
             self.factory = SmartThingsEntityFactory(self.client, self.api)
+            
+            self.factory.command_callback = self.track_entity_command
             
             await self._create_entities()
             
@@ -194,7 +202,7 @@ class SmartThingsIntegration:
         
         self.polling_active = True
         self.status_update_task = self.loop.create_task(self._enhanced_polling_loop())
-        _LOG.info("Enhanced polling started with improved sync")
+        _LOG.info("Enhanced polling started with command priority")
     
     async def _enhanced_polling_loop(self):
         consecutive_errors = 0
@@ -206,11 +214,11 @@ class SmartThingsIntegration:
                     await asyncio.sleep(10)
                     continue
                 
-                await self._smart_poll_entities_enhanced()
+                await self._smart_poll_entities_with_priority()
                 
                 consecutive_errors = 0
                 
-                sleep_time = self._calculate_dynamic_sleep_enhanced()
+                sleep_time = self._calculate_dynamic_sleep_with_commands()
                 await asyncio.sleep(sleep_time)
                 
             except asyncio.CancelledError:
@@ -229,10 +237,14 @@ class SmartThingsIntegration:
         
         self.polling_active = False
 
-    async def _smart_poll_entities_enhanced(self):
+    async def _smart_poll_entities_with_priority(self):
+        """⚡ OPTIMIZED: Priority polling with command awareness"""
         import time
         now = time.time()
         entities_to_poll = []
+        
+        high_priority_entities = []
+        normal_priority_entities = []
         
         for entity_id in self.subscribed_entities:
             entity = self.api.configured_entities.get(entity_id)
@@ -246,6 +258,12 @@ class SmartThingsIntegration:
             last_command = self.entity_last_command.get(entity_id, 0)
             
             if now - last_command < 30:
+                required_interval = 1.0
+                if now - last_poll >= required_interval:
+                    high_priority_entities.append((entity_id, device_id, entity, "HIGH"))
+            
+            # Normal priority logic
+            elif now - last_command < 30:
                 required_interval = 2
             elif now - last_change < 60:
                 required_interval = 4
@@ -254,34 +272,38 @@ class SmartThingsIntegration:
             else:
                 required_interval = 20
             
-            if now - last_poll >= required_interval:
-                entities_to_poll.append((entity_id, device_id, entity))
+            if now - last_poll >= required_interval and entity_id not in [e[0] for e in high_priority_entities]:
+                normal_priority_entities.append((entity_id, device_id, entity, "NORMAL"))
         
-        if not entities_to_poll:
-            return
+        if high_priority_entities:
+            _LOG.debug(f"⚡ Priority polling {len(high_priority_entities)} recently commanded entities")
+            changes = await self._poll_entity_batch_priority(high_priority_entities)
+            if changes > 0:
+                _LOG.info(f"⚡ High priority changes detected: {changes}")
         
-        _LOG.debug(f"Smart polling {len(entities_to_poll)} entities")
-        
-        batch_size = 5
-        changes_detected = 0
-        
-        for i in range(0, len(entities_to_poll), batch_size):
-            batch = entities_to_poll[i:i + batch_size]
-            batch_changes = await self._poll_entity_batch_enhanced(batch)
-            changes_detected += batch_changes
+        # Process normal entities
+        if normal_priority_entities:
+            batch_size = 5
+            total_changes = 0
             
-            if i + batch_size < len(entities_to_poll):
-                await asyncio.sleep(0.3)
-        
-        if changes_detected > 0:
-            _LOG.info(f"Detected {changes_detected} state changes in batch")
+            for i in range(0, len(normal_priority_entities), batch_size):
+                batch = normal_priority_entities[i:i + batch_size]
+                batch_changes = await self._poll_entity_batch_priority(batch)
+                total_changes += batch_changes
+                
+                if i + batch_size < len(normal_priority_entities):
+                    await asyncio.sleep(0.3)
+            
+            if total_changes > 0:
+                _LOG.info(f"Detected {total_changes} state changes in batch")
 
-    async def _poll_entity_batch_enhanced(self, entity_batch):
+    async def _poll_entity_batch_priority(self, entity_batch):
+        """⚡ OPTIMIZED: Batch polling with priority handling"""
         import time
         now = time.time()
         changes_detected = 0
         
-        for entity_id, device_id, entity in entity_batch:
+        for entity_id, device_id, entity, priority in entity_batch:
             try:
                 old_attributes = dict(entity.attributes)
                 
@@ -295,7 +317,11 @@ class SmartThingsIntegration:
                     if old_attributes != entity.attributes:
                         changes_detected += 1
                         self.entity_last_change[entity_id] = now
-                        _LOG.info(f"State changed: {entity.name}")
+                        
+                        if priority == "HIGH":
+                            _LOG.info(f"⚡ Priority state changed: {entity.name}")
+                        else:
+                            _LOG.info(f"State changed: {entity.name}")
                     
                     self.api.configured_entities.update_attributes(entity.id, entity.attributes)
                     
@@ -307,32 +333,33 @@ class SmartThingsIntegration:
         
         return changes_detected
 
-    def _calculate_dynamic_sleep_enhanced(self) -> float:
+    def _calculate_dynamic_sleep_with_commands(self) -> float:
+        """⚡ OPTIMIZED: Dynamic sleep with command awareness"""
         import time
         now = time.time()
         
         recent_commands = sum(1 for last_cmd in self.entity_last_command.values() 
-                             if now - last_cmd < 120)
+                             if now - last_cmd < 60)
+        
         recent_changes = sum(1 for last_change in self.entity_last_change.values() 
                             if now - last_change < 300)
         
-        total_activity = recent_commands + recent_changes
-        
         if recent_commands > 0:
-            return 0.5
-        elif total_activity > 8:
+            return 0.2
+        elif recent_changes > 8:
             return 1.0
-        elif total_activity > 4:
+        elif recent_changes > 4:
             return 2.0
-        elif total_activity > 1:
+        elif recent_changes > 1:
             return 3.0
         else:
             return 5.0
 
     def track_entity_command(self, entity_id: str):
+        """⚡ Track user commands for priority polling"""
         import time
         self.entity_last_command[entity_id] = time.time()
-        _LOG.debug(f"Tracked command for {entity_id}")
+        _LOG.debug(f"⚡ Tracked priority command for {entity_id}")
 
     async def _cleanup(self):
         self.polling_active = False

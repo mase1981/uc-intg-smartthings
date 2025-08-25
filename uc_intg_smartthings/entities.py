@@ -1,5 +1,5 @@
 """
-SmartThings Entity Factory for UC Remote
+SmartThings Entity Factory for UC Remote - OPTIMIZED VERSION
 
 :copyright: (c) 2025 by Meir Miyara
 :license: MPL-2.0, see LICENSE for more details.
@@ -20,8 +20,12 @@ from ucapi.media_player import MediaPlayer, Features as MediaFeatures, Attribute
 from ucapi.climate import Climate, Features as ClimateFeatures, Attributes as ClimateAttr, States as ClimateStates
 from ucapi.api_definitions import StatusCodes
 
+<<<<<<< Updated upstream
 # Direct imports for PyInstaller flat structure
 from client import SmartThingsDevice, SmartThingsClient
+=======
+from uc_intg_smartthings.client import SmartThingsDevice, SmartThingsClient
+>>>>>>> Stashed changes
 
 _LOG = logging.getLogger(__name__)
 
@@ -44,6 +48,7 @@ class SmartThingsEntityFactory:
         self.optimistic_states = {}
         self.last_real_updates = {}
         self.state_sync_tasks = {}
+        self.command_callback = None
 
     def determine_entity_type(self, device: SmartThingsDevice) -> Optional[str]:
         capabilities = device.capabilities
@@ -444,6 +449,9 @@ class SmartThingsEntityFactory:
         
         self.command_timestamps[device_id] = time.time()
         
+        if self.command_callback:
+            self.command_callback(entity.id)
+        
         try:
             capability, command, args = self._map_command(entity_type, cmd_id, params, entity, capabilities)
             
@@ -459,7 +467,7 @@ class SmartThingsEntityFactory:
                 command_success = await self.client.execute_command(device_id, capability, command, args)
             
             if command_success:
-                self._schedule_state_verification(entity, device_id)
+                self._schedule_immediate_state_verification(entity, device_id)
                 _LOG.info(f"Command succeeded with optimistic update: {entity.name}")
                 return StatusCodes.OK
             else:
@@ -576,10 +584,11 @@ class SmartThingsEntityFactory:
             entity.attributes.update(old_attributes)
             return False
 
-    def _schedule_state_verification(self, entity, device_id: str):
-        async def verify_state():
+    def _schedule_immediate_state_verification(self, entity, device_id: str):
+        """⚡ OPTIMIZED: Fast state verification for user-triggered commands"""
+        async def immediate_verify_state():
             try:
-                await asyncio.sleep(1.5)
+                await asyncio.sleep(0.3)
                 
                 async with self.client:
                     device_status = await self.client.get_device_status(device_id)
@@ -590,12 +599,20 @@ class SmartThingsEntityFactory:
                     
                     if old_attributes != entity.attributes:
                         self.api.configured_entities.update_attributes(entity.id, entity.attributes)
-                        _LOG.info(f"State verification complete: {entity.name} -> {entity.attributes}")
+                        _LOG.info(f"⚡ Fast verification complete: {entity.name} -> {entity.attributes}")
                     else:
-                        _LOG.debug(f"Optimistic update was correct: {entity.name}")
+                        await asyncio.sleep(1.2)
+                        device_status_retry = await self.client.get_device_status(device_id)
+                        if device_status_retry:
+                            self.update_entity_attributes(entity, device_status_retry)
+                            if old_attributes != entity.attributes:
+                                self.api.configured_entities.update_attributes(entity.id, entity.attributes)
+                                _LOG.info(f"⚡ Delayed verification complete: {entity.name} -> {entity.attributes}")
+                            else:
+                                _LOG.debug(f"Optimistic update confirmed correct: {entity.name}")
                         
             except Exception as e:
-                _LOG.warning(f"State verification failed for {entity.name}: {e}")
+                _LOG.warning(f"Fast state verification failed for {entity.name}: {e}")
             finally:
                 if entity.id in self.state_sync_tasks:
                     del self.state_sync_tasks[entity.id]
@@ -603,7 +620,7 @@ class SmartThingsEntityFactory:
         if entity.id in self.state_sync_tasks:
             self.state_sync_tasks[entity.id].cancel()
         
-        task = asyncio.create_task(verify_state())
+        task = asyncio.create_task(immediate_verify_state())
         self.state_sync_tasks[entity.id] = task
 
     async def _revert_optimistic_update(self, entity, device_id: str):

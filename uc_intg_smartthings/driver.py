@@ -232,7 +232,7 @@ class SmartThingsIntegration:
         self.polling_active = False
 
     async def _smart_poll_entities_with_priority(self):
-        """Priority polling with command awareness"""
+        """Priority polling with command awareness - FIXED VERSION"""
         import time
         now = time.time()
         
@@ -250,17 +250,16 @@ class SmartThingsIntegration:
             last_change = self.entity_last_change.get(entity_id, 0)
             last_command = self.entity_last_command.get(entity_id, 0)
             
-            if now - last_command < 30:
-                required_interval = 1.0  # Very fast polling for user commands
+            if now - last_command < 5:
+                required_interval = 2.0
                 if now - last_poll >= required_interval:
                     high_priority_entities.append((entity_id, device_id, entity, "HIGH"))
-            
             elif now - last_change < 60:
-                required_interval = 4
-            elif now - last_change < 300:
                 required_interval = 8
+            elif now - last_change < 300:
+                required_interval = 15
             else:
-                required_interval = 20
+                required_interval = 30
             
             if now - last_poll >= required_interval and entity_id not in [e[0] for e in high_priority_entities]:
                 normal_priority_entities.append((entity_id, device_id, entity, "NORMAL"))
@@ -281,7 +280,7 @@ class SmartThingsIntegration:
                 total_changes += batch_changes
                 
                 if i + batch_size < len(normal_priority_entities):
-                    await asyncio.sleep(0.3)
+                    await asyncio.sleep(0.5)
             
             if total_changes > 0:
                 _LOG.info(f"Detected {total_changes} state changes in batch")
@@ -323,26 +322,27 @@ class SmartThingsIntegration:
         return changes_detected
 
     def _calculate_dynamic_sleep_with_commands(self) -> float:
-        """Dynamic sleep with command awareness"""
+        """FIXED: Dynamic sleep with command awareness"""
         import time
         now = time.time()
         
+        # Check for very recent commands (last 5 seconds)
         recent_commands = sum(1 for last_cmd in self.entity_last_command.values() 
-                             if now - last_cmd < 60)  # Extended window
+                             if now - last_cmd < 5)
         
         recent_changes = sum(1 for last_change in self.entity_last_change.values() 
                             if now - last_change < 300)
         
         if recent_commands > 0:
-            return 0.2
+            return 1.0  # Poll every 1 second when commands are very recent
         elif recent_changes > 8:
-            return 1.0
-        elif recent_changes > 4:
             return 2.0
+        elif recent_changes > 4:
+            return 4.0
         elif recent_changes > 1:
-            return 3.0
+            return 6.0
         else:
-            return 5.0
+            return 10.0
 
     def track_entity_command(self, entity_id: str):
         """Track user commands for priority polling"""

@@ -14,8 +14,8 @@ from ucapi.api_definitions import (
     IntegrationSetupError
 )
 
-from client import SmartThingsClient, SmartThingsAPIError, SmartThingsDevice
-from config import ConfigManager, validate_smartthings_token, get_recommended_polling_settings
+from uc_intg_smartthings.client import SmartThingsClient, SmartThingsAPIError, SmartThingsDevice
+from uc_intg_smartthings.config import ConfigManager, validate_smartthings_token, get_recommended_polling_settings
 
 _LOG = logging.getLogger(__name__)
 

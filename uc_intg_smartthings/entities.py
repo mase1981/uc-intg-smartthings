@@ -1,6 +1,4 @@
 """
-Enhanced SmartThings entity factory with improved state synchronization.
-
 :copyright: (c) 2025 by Meir Miyara
 :license: MPL-2.0, see LICENSE for more details.
 """
@@ -494,25 +492,6 @@ class SmartThingsEntityFactory:
                     elif cmd_id == 'off':
                         entity.attributes[SwitchAttr.STATE] = SwitchStates.OFF
                     elif cmd_id == 'toggle':
-                current_state = entity.attributes.get(LightAttr.STATE)
-                if current_state == LightStates.ON:
-                    capability, command = 'switch', 'off'
-                else:
-                    capability, command = 'switch', 'on'
-        
-        elif entity_type == EntityType.COVER:
-            if cmd_id == 'open':
-                capability, command = 'doorControl', 'open'
-            elif cmd_id == 'close':
-                capability, command = 'doorControl', 'close'
-            elif cmd_id == 'stop':
-                capability, command = 'doorControl', 'stop'
-        
-        elif entity_type == EntityType.BUTTON:
-            if cmd_id == 'push':
-                capability, command = 'button', 'pushed'
-        
-        return capability, command, args':
                         current_state = entity.attributes.get(SwitchAttr.STATE)
                         entity.attributes[SwitchAttr.STATE] = SwitchStates.OFF if current_state == SwitchStates.ON else SwitchStates.ON
             
@@ -609,17 +588,4 @@ class SmartThingsEntityFactory:
                 if cmd_id == 'on':
                     capability, command = 'switch', 'on'
                 elif cmd_id == 'off':
-                    capability, command = 'switch', 'off'
-                elif cmd_id == 'toggle':
-                    current_state = entity.attributes.get(SwitchAttr.STATE)
-                    if current_state == SwitchStates.ON:
-                        capability, command = 'switch', 'off'
-                    else:
-                        capability, command = 'switch', 'on'
-        
-        elif entity_type == EntityType.LIGHT:
-            if cmd_id == 'on':
-                capability, command = 'switch', 'on'
-            elif cmd_id == 'off':
-                capability, command = 'switch', 'off'
-            elif cmd_id == 'toggle
+                    capability, command = 'switch', 'off

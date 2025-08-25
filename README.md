@@ -174,14 +174,6 @@ docker run -d --restart=unless-stopped --net=host \
    - Choose your SmartThings location (home, office, etc.)
    - Integration will discover all devices in that location
 
-   **Device Type Selection:**
-   - ✅ **Lights**: Smart bulbs, switches, dimmers (Recommended)
-   - ✅ **Switches**: Smart plugs, outlets, appliances (Recommended)  
-   - ⚪ **Sensors**: Motion, contact, temperature sensors (Optional)
-   - ✅ **Climate**: Thermostats, temperature control (Recommended)
-   - ✅ **Covers**: Garage doors, blinds, shades (Recommended)
-   - ✅ **Media Players**: Smart TVs, speakers (Recommended)
-
    **Polling Configuration:**
    - **Base Interval**: How often to check device status (3-60 seconds)
    - **Auto-optimized** based on your device count

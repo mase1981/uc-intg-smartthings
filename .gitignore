@@ -78,6 +78,7 @@ test*
 diagnostics.py
 smartthings_diagnostics_20250824_164003.json
 standalone_diagnostic.py
+smartthings_config.json
 
 # OS generated files
 .DS_Store

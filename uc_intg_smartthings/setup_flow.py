@@ -1,7 +1,8 @@
-#!/usr/bin/env python3
 """
-File: uc_intg_smartthings/setup_flow.py
-Developer: Meir Miyara <meir.miyara@gmail.com>
+Enhanced SmartThings integration setup flow with corrected device detection.
+
+:copyright: (c) 2025 by Meir Miyara
+:license: MPL-2.0, see LICENSE for more details
 """
 
 import logging
@@ -20,17 +21,13 @@ from uc_intg_smartthings.config import ConfigManager, validate_smartthings_token
 _LOG = logging.getLogger(__name__)
 
 class DeviceAnalyzer:
-    """Device analyzer with the same logic as the main entity factory."""
     
     @staticmethod
     def determine_entity_type(capabilities: set, device_name: str) -> Optional[str]:
-        """Determine entity type using the same logic as entities.py"""
         device_name_lower = device_name.lower()
         
-        # Priority 1: LIGHTS
         light_caps = {"switchLevel", "colorControl", "colorTemperature"}
         if light_caps.intersection(capabilities):
-            # Exclude non-light devices
             excluded_caps = {
                 "lock", "doorControl", "windowShade", "garageDoorControl",
                 "thermostat", "mediaPlayback", "audioVolume",
@@ -42,7 +39,6 @@ class DeviceAnalyzer:
         if "switch" in capabilities and any(word in device_name_lower for word in ["light", "lamp", "bulb", "led"]):
             return "light"
         
-        # Priority 2: SENSORS
         sensor_caps = {
             "lock", "contactSensor", "motionSensor", "presenceSensor", 
             "temperatureMeasurement", "relativeHumidityMeasurement",
@@ -55,11 +51,10 @@ class DeviceAnalyzer:
         if sensor_caps.intersection(capabilities):
             return "sensor"
         
-        # Priority 3: SWITCHES
         if "switch" in capabilities:
             excluded_caps = {
                 "switchLevel", "colorControl", "colorTemperature",
-                "doorControl", "windowShade", "garageDoorControl",
+                "doorControl", "windowShade", "garageDoorControl",  
                 "thermostat", "thermostatCoolingSetpoint", "thermostatHeatingSetpoint",
                 "mediaPlayback", "audioVolume"
             }
@@ -70,7 +65,6 @@ class DeviceAnalyzer:
         return None
 
 class SmartThingsSetupFlow:
-    """Enhanced setup flow with corrected device detection."""
     
     def __init__(self, api, config_manager: ConfigManager):
         self.api = api
@@ -79,7 +73,6 @@ class SmartThingsSetupFlow:
         self.discovered_devices = []
         
     async def handle_setup_request(self, msg: SetupDriver) -> Any:
-        """Handle setup request with enhanced flow."""
         try:
             if isinstance(msg, DriverSetupRequest):
                 return await self._handle_initial_setup(msg.setup_data, msg.reconfigure)
@@ -96,7 +89,6 @@ class SmartThingsSetupFlow:
             return SetupError(IntegrationSetupError.OTHER)
 
     async def _handle_initial_setup(self, setup_data: Dict[str, Any], reconfigure: bool = False) -> Any:
-        """Handle initial setup with enhanced validation."""
         _LOG.info(f"Starting SmartThings setup (reconfigure={reconfigure})")
         
         if reconfigure:
@@ -108,17 +100,14 @@ class SmartThingsSetupFlow:
         if not token:
             return self._request_access_token()
         
-        # Validate token format
         if not validate_smartthings_token(token):
             _LOG.warning("Invalid SmartThings token format provided")
             return self._request_access_token(error_message="Invalid token format. Please check your Personal Access Token.")
         
-        # Store token and test connection
         self.setup_state["access_token"] = token
         
         try:
             async with SmartThingsClient(token) as client:
-                # Test connection by getting locations
                 locations = await client.get_locations()
                 
                 if not locations:
@@ -128,14 +117,11 @@ class SmartThingsSetupFlow:
                 self.setup_state["locations"] = locations
                 _LOG.info(f"Found {len(locations)} SmartThings locations")
                 
-                # Single location - proceed directly
                 if len(locations) == 1:
                     location = locations[0]
                     self.setup_state["location_id"] = location["locationId"]
                     self.setup_state["location_name"] = location["name"]
                     return await self._discover_and_configure_devices(client)
-                
-                # Multiple locations - ask user to choose
                 else:
                     return self._request_location_selection(locations)
                     
@@ -166,7 +152,6 @@ class SmartThingsSetupFlow:
             }
         ]
         
-        # Add error message if token was invalid
         if error_message:
             settings.insert(0, {
                 "id": "error_info",
@@ -178,7 +163,6 @@ class SmartThingsSetupFlow:
                 }
             })
         
-        # Add detailed instructions
         settings.append({
             "id": "instructions",
             "label": {"en": "Setup Instructions"},
@@ -231,7 +215,6 @@ class SmartThingsSetupFlow:
         )
 
     async def _discover_and_configure_devices(self, client: SmartThingsClient) -> RequestUserInput:
-        """Discover devices and present configuration options with CORRECTED categorization."""
         location_id = self.setup_state["location_id"]
         
         _LOG.info(f"Discovering devices in location: {self.setup_state.get('location_name', location_id)}")
@@ -277,7 +260,7 @@ class SmartThingsSetupFlow:
                         "label": {"en": " "},
                         "field": {
                             "label": {
-                                "value": {"en": f"   📝 {examples_text}"}
+                                "value": {"en": f"   🔹 {examples_text}"}
                             }
                         }
                     })
@@ -314,7 +297,6 @@ class SmartThingsSetupFlow:
         )
 
     def _categorize_devices_corrected(self, devices_raw: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
-        """CORRECTED device categorization using the same logic as entities.py."""
         categories = {
             "light": {"count": 0, "examples": [], "display_name": "Lights"},
             "switch": {"count": 0, "examples": [], "display_name": "Switches"}, 
@@ -356,13 +338,10 @@ class SmartThingsSetupFlow:
         return categories
 
     async def _handle_user_data_response(self, input_values: Dict[str, Any]) -> Any:
-        """Handle user data response with enhanced validation."""
         _LOG.debug(f"Processing user data response: {list(input_values.keys())}")
         
-        # Update setup state
         self.setup_state.update(input_values)
         
-        # Handle token input
         if "token" in input_values:
             token = input_values["token"]
             if not validate_smartthings_token(token):
@@ -372,7 +351,6 @@ class SmartThingsSetupFlow:
             
             self.setup_state["access_token"] = token
             
-            # Test token and get locations
             try:
                 async with SmartThingsClient(token) as client:
                     locations = await client.get_locations()
@@ -397,18 +375,15 @@ class SmartThingsSetupFlow:
                 else:
                     return SetupError(IntegrationSetupError.OTHER)
         
-        # Handle location selection
         if "location_id" in input_values:
             location_id = input_values["location_id"]
             
-            # Find location name
             locations = self.setup_state.get("locations", [])
             for location in locations:
                 if location["locationId"] == location_id:
                     self.setup_state["location_name"] = location["name"]
                     break
             
-            # Discover devices for selected location
             try:
                 token = self.setup_state["access_token"]
                 async with SmartThingsClient(token) as client:
@@ -417,16 +392,13 @@ class SmartThingsSetupFlow:
                 _LOG.error(f"Error discovering devices: {e}")
                 return SetupError(IntegrationSetupError.OTHER)
         
-        # Handle final configuration
         if any(key.startswith("include_") for key in input_values.keys()):
             return await self._finalize_setup()
         
-        # If we reach here, something went wrong
         _LOG.warning("Unexpected user data response state")
         return SetupError(IntegrationSetupError.OTHER)
 
     async def _handle_user_confirmation(self, confirm: bool) -> Any:
-        """Handle user confirmation responses."""
         if confirm:
             return await self._finalize_setup()
         else:
@@ -501,9 +473,7 @@ class SmartThingsSetupFlow:
             if not token or not location_id:
                 return False
             
-            # Test API connectivity
             async with SmartThingsClient(token) as client:
-                # Try to get a few devices to verify everything works
                 devices = await client.get_devices(location_id)
                 _LOG.debug(f"Configuration test successful: {len(devices)} devices accessible")
                 return True

@@ -1,8 +1,10 @@
-#!/usr/bin/env python3
 """
+Enhanced SmartThings API client with improved reliability and connection handling.
+
 :copyright: (c) 2025 by Meir Miyara
-:license: MPL-2.0, see LICENSE for more details.
+:license: MPL-2.0, see LICENSE for more details
 """
+
 import asyncio
 import json
 import logging
@@ -53,6 +55,7 @@ class SmartThingsDevice(BaseModel):
 
 
 class HomeAssistantCapabilityMapping:
+    
     CAPABILITY_TO_ENTITY = {
         frozenset(["switch", "switchLevel"]): "light",
         frozenset(["switch", "colorControl"]): "light",
@@ -129,6 +132,7 @@ class HomeAssistantCapabilityMapping:
 
 
 class SmartThingsAPIError(Exception):
+    """Custom exception for API errors."""
     def __init__(self, message, status_code=None):
         super().__init__(message)
         self.status_code = status_code
@@ -249,6 +253,7 @@ class SmartThingsClient:
                 raise SmartThingsAPIError(f"Request timeout after {self._max_retries + 1} attempts")
 
     async def get_locations(self) -> List[Dict[str, Any]]:
+        """Get user's SmartThings locations."""
         response = await self._make_request("GET", "/locations")
         locations = response.get("items", [])
         _LOG.info(f"Found {len(locations)} SmartThings locations")
@@ -275,6 +280,7 @@ class SmartThingsClient:
         return processed_devices
 
     async def get_rooms(self, location_id: str) -> List[Dict[str, Any]]:
+        """Get rooms for a specific location.""" 
         response = await self._make_request("GET", f"/locations/{location_id}/rooms")
         return response.get("items", [])
 
@@ -320,14 +326,14 @@ class SmartThingsClient:
                 del self._device_cache[cache_key]
                 del self._cache_timestamps[cache_key]
             
-            _LOG.info(f"✅ Command executed: {device_id} -> {capability}.{command}({args})")
+            _LOG.info(f"Command executed: {device_id} -> {capability}.{command}({args})")
             return True
             
         except SmartThingsAPIError as e:
-            _LOG.error(f"❌ Command failed: {device_id} -> {capability}.{command}: {e}")
+            _LOG.error(f"Command failed: {device_id} -> {capability}.{command}: {e}")
             return False
         except Exception as e:
-            _LOG.error(f"❌ Command failed: {device_id} -> {capability}.{command}: {e}")
+            _LOG.error(f"Command failed: {device_id} -> {capability}.{command}: {e}")
             return False
 
     def get_performance_stats(self) -> Dict[str, Any]:
@@ -372,6 +378,7 @@ class SmartThingsClient:
         return results
 
     async def health_check(self) -> bool:
+        """Perform a health check on the SmartThings API connection."""
         try:
             locations = await self.get_locations()
             return len(locations) >= 0
@@ -380,6 +387,7 @@ class SmartThingsClient:
             return False
 
     def get_connection_status(self) -> Dict[str, Any]:
+        """Get current connection status and statistics."""
         return {
             "session_active": self._session is not None and not self._session.closed,
             "cache_entries": len(self._device_cache),

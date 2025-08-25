@@ -17,15 +17,10 @@ from ucapi.sensor import Sensor, Attributes as SensorAttr, States as SensorState
 from ucapi.cover import Cover, Features as CoverFeatures, Attributes as CoverAttr, States as CoverStates, DeviceClasses as CoverClasses
 from ucapi.button import Button, Attributes as ButtonAttr, States as ButtonStates
 from ucapi.media_player import MediaPlayer, Features as MediaFeatures, Attributes as MediaAttr, States as MediaStates, DeviceClasses as MediaClasses
-from ucapi.climate import Climate, Features as ClimateFeatures, Attributes as ClimateAttr, States as ClimateStates
+from ucapi.climate import Climate, Features as ClimateFeatures,Attributes as ClimateAttr, States as ClimateStates
 from ucapi.api_definitions import StatusCodes
 
-<<<<<<< Updated upstream
-# Direct imports for PyInstaller flat structure
-from client import SmartThingsDevice, SmartThingsClient
-=======
 from uc_intg_smartthings.client import SmartThingsDevice, SmartThingsClient
->>>>>>> Stashed changes
 
 _LOG = logging.getLogger(__name__)
 
@@ -496,54 +491,6 @@ class SmartThingsEntityFactory:
                             new_state = SwitchStates.ON
                         entity.attributes[SwitchAttr.STATE] = new_state
                     elif cmd_id == 'off':
-                capability, command = 'switch', 'off'
-            elif cmd_id == 'toggle':
-                current_state = entity.attributes.get(LightAttr.STATE)
-                if current_state == LightStates.ON:
-                    capability, command = 'switch', 'off'
-                else:
-                    capability, command = 'switch', 'on'
-        
-        elif entity_type == EntityType.COVER:
-            if cmd_id == 'open':
-                if "doorControl" in capabilities:
-                    capability, command = 'doorControl', 'open'
-                elif "windowShade" in capabilities:
-                    capability, command = 'windowShade', 'open'
-            elif cmd_id == 'close':
-                if "doorControl" in capabilities:
-                    capability, command = 'doorControl', 'close'
-                elif "windowShade" in capabilities:
-                    capability, command = 'windowShade', 'close'
-            elif cmd_id == 'stop':
-                if "doorControl" in capabilities:
-                    capability, command = 'doorControl', 'stop'
-                elif "windowShade" in capabilities:
-                    capability, command = 'windowShade', 'stop'
-        
-        elif entity_type == EntityType.MEDIA_PLAYER:
-            if cmd_id == 'on':
-                capability, command = 'switch', 'on'
-            elif cmd_id == 'off':
-                capability, command = 'switch', 'off'
-            elif cmd_id == 'toggle':
-                current_state = entity.attributes.get(MediaAttr.STATE)
-                if current_state == MediaStates.ON:
-                    capability, command = 'switch', 'off'
-                else:
-                    capability, command = 'switch', 'on'
-        
-        elif entity_type == EntityType.CLIMATE:
-            if cmd_id == 'on':
-                capability, command = 'thermostat', 'auto'
-            elif cmd_id == 'off':
-                capability, command = 'thermostat', 'off'
-        
-        elif entity_type == EntityType.BUTTON:
-            if cmd_id == 'push':
-                capability, command = 'momentary', 'push'
-        
-        return capability, command, args':
                         entity.attributes[SwitchAttr.STATE] = SwitchStates.OFF
                 else:
                     if cmd_id == 'on':
@@ -667,4 +614,52 @@ class SmartThingsEntityFactory:
         elif entity_type == EntityType.LIGHT:
             if cmd_id == 'on':
                 capability, command = 'switch', 'on'
-            elif cmd_id == 'off
+            elif cmd_id == 'off':
+                capability, command = 'switch', 'off'
+            elif cmd_id == 'toggle':
+                current_state = entity.attributes.get(LightAttr.STATE)
+                if current_state == LightStates.ON:
+                    capability, command = 'switch', 'off'
+                else:
+                    capability, command = 'switch', 'on'
+        
+        elif entity_type == EntityType.COVER:
+            if cmd_id == 'open':
+                if "doorControl" in capabilities:
+                    capability, command = 'doorControl', 'open'
+                elif "windowShade" in capabilities:
+                    capability, command = 'windowShade', 'open'
+            elif cmd_id == 'close':
+                if "doorControl" in capabilities:
+                    capability, command = 'doorControl', 'close'
+                elif "windowShade" in capabilities:
+                    capability, command = 'windowShade', 'close'
+            elif cmd_id == 'stop':
+                if "doorControl" in capabilities:
+                    capability, command = 'doorControl', 'stop'
+                elif "windowShade" in capabilities:
+                    capability, command = 'windowShade', 'stop'
+        
+        elif entity_type == EntityType.MEDIA_PLAYER:
+            if cmd_id == 'on':
+                capability, command = 'switch', 'on'
+            elif cmd_id == 'off':
+                capability, command = 'switch', 'off'
+            elif cmd_id == 'toggle':
+                current_state = entity.attributes.get(MediaAttr.STATE)
+                if current_state == MediaStates.ON:
+                    capability, command = 'switch', 'off'
+                else:
+                    capability, command = 'switch', 'on'
+        
+        elif entity_type == EntityType.CLIMATE:
+            if cmd_id == 'on':
+                capability, command = 'thermostat', 'auto'
+            elif cmd_id == 'off':
+                capability, command = 'thermostat', 'off'
+        
+        elif entity_type == EntityType.BUTTON:
+            if cmd_id == 'push':
+                capability, command = 'momentary', 'push'
+        
+        return capability, command, args

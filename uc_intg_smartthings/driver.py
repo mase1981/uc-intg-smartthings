@@ -13,6 +13,12 @@ from ucapi import IntegrationAPI
 from ucapi.api_definitions import Events, DeviceStates, SetupDriver
 import ucapi.api_definitions as uc
 
+import uc_intg_smartthings.client
+import uc_intg_smartthings.config
+import uc_intg_smartthings.entities
+import uc_intg_smartthings.entity_mapping
+import uc_intg_smartthings.setup_flow
+
 from uc_intg_smartthings.client import SmartThingsClient
 from uc_intg_smartthings.entities import SmartThingsEntityFactory
 from uc_intg_smartthings.setup_flow import SmartThingsSetupFlow

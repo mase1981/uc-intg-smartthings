@@ -1,4 +1,6 @@
 """
+SmartThings Integration Driver for Unfolded Circle Remote 2/3
+
 :copyright: (c) 2025 by Meir Miyara
 :license: MPL-2.0, see LICENSE for more details.
 """
@@ -11,10 +13,11 @@ from ucapi import IntegrationAPI
 from ucapi.api_definitions import Events, DeviceStates, SetupDriver
 import ucapi.api_definitions as uc
 
-from uc_intg_smartthings.client import SmartThingsClient
-from uc_intg_smartthings.entities import SmartThingsEntityFactory
-from uc_intg_smartthings.setup_flow import SmartThingsSetupFlow
-from uc_intg_smartthings.config import ConfigManager
+# Direct imports without package prefix - PyInstaller compatible
+from client import SmartThingsClient
+from entities import SmartThingsEntityFactory
+from setup_flow import SmartThingsSetupFlow
+from config import ConfigManager
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 _LOG = logging.getLogger(__name__)
@@ -174,9 +177,9 @@ class SmartThingsIntegration:
                 self.api.configured_entities.update_attributes(entity.id, entity.attributes)
                 
                 if old_attributes != entity.attributes:
-                    _LOG.info(f"🔄 Initial sync: {entity.name} -> {entity.attributes}")
+                    _LOG.info(f"Initial sync: {entity.name} -> {entity.attributes}")
                 else:
-                    _LOG.debug(f"✅ Initial sync: {entity.name} (no change)")
+                    _LOG.debug(f"Initial sync: {entity.name} (no change)")
                 
                 return True
                 

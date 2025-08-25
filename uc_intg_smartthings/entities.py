@@ -1,4 +1,6 @@
 """
+SmartThings Entity Factory for UC Remote
+
 :copyright: (c) 2025 by Meir Miyara
 :license: MPL-2.0, see LICENSE for more details.
 """
@@ -18,7 +20,8 @@ from ucapi.media_player import MediaPlayer, Features as MediaFeatures, Attribute
 from ucapi.climate import Climate, Features as ClimateFeatures, Attributes as ClimateAttr, States as ClimateStates
 from ucapi.api_definitions import StatusCodes
 
-from uc_intg_smartthings.client import SmartThingsDevice, SmartThingsClient
+# Direct imports for PyInstaller flat structure
+from client import SmartThingsDevice, SmartThingsClient
 
 _LOG = logging.getLogger(__name__)
 
@@ -47,26 +50,26 @@ class SmartThingsEntityFactory:
         device_name = (device.label or device.name or "").lower()
         
         if "button" in capabilities or "momentary" in capabilities:
-            _LOG.info(f"🔘 {device.label} -> BUTTON (has button capability)")
+            _LOG.info(f"Button {device.label} -> BUTTON (has button capability)")
             return EntityType.BUTTON
         
         climate_caps = {"thermostat", "thermostatCoolingSetpoint", "thermostatHeatingSetpoint", "airConditioner"}
         if climate_caps.intersection(capabilities):
-            _LOG.info(f"🌡️ {device.label} -> CLIMATE (has {climate_caps.intersection(capabilities)})")
+            _LOG.info(f"Climate {device.label} -> CLIMATE (has {climate_caps.intersection(capabilities)})")
             return EntityType.CLIMATE
         
         media_caps = {"mediaPlayback", "audioVolume", "tvChannel", "mediaTrackControl"}
         if media_caps.intersection(capabilities):
-            _LOG.info(f"📺 {device.label} -> MEDIA_PLAYER (has {media_caps.intersection(capabilities)})")
+            _LOG.info(f"Media {device.label} -> MEDIA_PLAYER (has {media_caps.intersection(capabilities)})")
             return EntityType.MEDIA_PLAYER
         
         cover_caps = {"doorControl", "windowShade", "garageDoorControl"}
         if cover_caps.intersection(capabilities):
-            _LOG.info(f"🏠 {device.label} -> COVER (has {cover_caps.intersection(capabilities)})")
+            _LOG.info(f"Cover {device.label} -> COVER (has {cover_caps.intersection(capabilities)})")
             return EntityType.COVER
         
         if "lock" in capabilities and "switch" not in capabilities:
-            _LOG.info(f"🔒 {device.label} -> SWITCH (lock as switch for control)")
+            _LOG.info(f"Lock {device.label} -> SWITCH (lock as switch for control)")
             return EntityType.SWITCH
         
         light_caps = {"switchLevel", "colorControl", "colorTemperature"}
@@ -79,12 +82,12 @@ class SmartThingsEntityFactory:
                 "dryerOperatingState", "washerOperatingState", "ovenOperatingState"
             }
             if not excluded_caps.intersection(capabilities):
-                _LOG.info(f"💡 {device.label} -> LIGHT (has {light_indicators})")
+                _LOG.info(f"Light {device.label} -> LIGHT (has {light_indicators})")
                 return EntityType.LIGHT
         
         light_keywords = ["light", "lamp", "bulb", "led", "fixture", "sconce", "chandelier"]
         if "switch" in capabilities and any(word in device_name for word in light_keywords):
-            _LOG.info(f"💡 {device.label} -> LIGHT (name contains light keyword)")
+            _LOG.info(f"Light {device.label} -> LIGHT (name contains light keyword)")
             return EntityType.LIGHT
         
         sensor_caps = {
@@ -97,7 +100,7 @@ class SmartThingsEntityFactory:
         
         sensor_matches = sensor_caps.intersection(capabilities)
         if sensor_matches:
-            _LOG.info(f"📊 {device.label} -> SENSOR (has {sensor_matches})")
+            _LOG.info(f"Sensor {device.label} -> SENSOR (has {sensor_matches})")
             return EntityType.SENSOR
         
         if "switch" in capabilities:
@@ -109,10 +112,10 @@ class SmartThingsEntityFactory:
             }
             
             if not excluded_caps.intersection(capabilities):
-                _LOG.info(f"🔌 {device.label} -> SWITCH (basic switch capability)")
+                _LOG.info(f"Switch {device.label} -> SWITCH (basic switch capability)")
                 return EntityType.SWITCH
         
-        _LOG.warning(f"❓ {device.label} -> NO TYPE DETECTED (capabilities: {capabilities})")
+        _LOG.warning(f"Unknown {device.label} -> NO TYPE DETECTED (capabilities: {capabilities})")
         return None
 
     def create_entity(self, device_data: Dict[str, Any], config: Dict[str, Any], area: Optional[str] = None) -> Optional[Union[Light, Switch, Sensor, Cover, Button, MediaPlayer, Climate]]:
@@ -155,7 +158,7 @@ class SmartThingsEntityFactory:
                 initial_attributes = self._get_default_attributes(entity_type, device.capabilities)
                 entity.attributes.update(initial_attributes)
                 
-                _LOG.info(f"✅ Created {entity_type} entity: {entity_id} ({label})")
+                _LOG.info(f"Created {entity_type} entity: {entity_id} ({label})")
                 return entity
                 
         except Exception as e:
@@ -339,7 +342,7 @@ class SmartThingsEntityFactory:
                 if entity.id in self.optimistic_states:
                     self.optimistic_states[entity.id] = {}
                 
-                _LOG.info(f"🔄 Real state update: {entity.name} -> {entity.attributes}")
+                _LOG.info(f"Real state update: {entity.name} -> {entity.attributes}")
                 
         except Exception as e:
             _LOG.error(f"Error updating attributes for {entity.id}: {e}")
@@ -457,10 +460,10 @@ class SmartThingsEntityFactory:
             
             if command_success:
                 self._schedule_state_verification(entity, device_id)
-                _LOG.info(f"✅ Command succeeded with optimistic update: {entity.name}")
+                _LOG.info(f"Command succeeded with optimistic update: {entity.name}")
                 return StatusCodes.OK
             else:
-                _LOG.warning(f"⚠️ Command failed, reverting optimistic update: {entity.name}")
+                _LOG.warning(f"Command failed, reverting optimistic update: {entity.name}")
                 await self._revert_optimistic_update(entity, device_id)
                 return StatusCodes.SERVER_ERROR
                 
@@ -485,6 +488,54 @@ class SmartThingsEntityFactory:
                             new_state = SwitchStates.ON
                         entity.attributes[SwitchAttr.STATE] = new_state
                     elif cmd_id == 'off':
+                capability, command = 'switch', 'off'
+            elif cmd_id == 'toggle':
+                current_state = entity.attributes.get(LightAttr.STATE)
+                if current_state == LightStates.ON:
+                    capability, command = 'switch', 'off'
+                else:
+                    capability, command = 'switch', 'on'
+        
+        elif entity_type == EntityType.COVER:
+            if cmd_id == 'open':
+                if "doorControl" in capabilities:
+                    capability, command = 'doorControl', 'open'
+                elif "windowShade" in capabilities:
+                    capability, command = 'windowShade', 'open'
+            elif cmd_id == 'close':
+                if "doorControl" in capabilities:
+                    capability, command = 'doorControl', 'close'
+                elif "windowShade" in capabilities:
+                    capability, command = 'windowShade', 'close'
+            elif cmd_id == 'stop':
+                if "doorControl" in capabilities:
+                    capability, command = 'doorControl', 'stop'
+                elif "windowShade" in capabilities:
+                    capability, command = 'windowShade', 'stop'
+        
+        elif entity_type == EntityType.MEDIA_PLAYER:
+            if cmd_id == 'on':
+                capability, command = 'switch', 'on'
+            elif cmd_id == 'off':
+                capability, command = 'switch', 'off'
+            elif cmd_id == 'toggle':
+                current_state = entity.attributes.get(MediaAttr.STATE)
+                if current_state == MediaStates.ON:
+                    capability, command = 'switch', 'off'
+                else:
+                    capability, command = 'switch', 'on'
+        
+        elif entity_type == EntityType.CLIMATE:
+            if cmd_id == 'on':
+                capability, command = 'thermostat', 'auto'
+            elif cmd_id == 'off':
+                capability, command = 'thermostat', 'off'
+        
+        elif entity_type == EntityType.BUTTON:
+            if cmd_id == 'push':
+                capability, command = 'momentary', 'push'
+        
+        return capability, command, args':
                         entity.attributes[SwitchAttr.STATE] = SwitchStates.OFF
                 else:
                     if cmd_id == 'on':
@@ -515,7 +566,7 @@ class SmartThingsEntityFactory:
                     self.state_sync_tasks[entity.id].cancel()
                 
                 self.api.configured_entities.update_attributes(entity.id, entity.attributes)
-                _LOG.info(f"🚀 Optimistic update applied: {entity.name} -> {entity.attributes}")
+                _LOG.info(f"Optimistic update applied: {entity.name} -> {entity.attributes}")
                 return True
             
             return True
@@ -539,9 +590,9 @@ class SmartThingsEntityFactory:
                     
                     if old_attributes != entity.attributes:
                         self.api.configured_entities.update_attributes(entity.id, entity.attributes)
-                        _LOG.info(f"🔄 State verification complete: {entity.name} -> {entity.attributes}")
+                        _LOG.info(f"State verification complete: {entity.name} -> {entity.attributes}")
                     else:
-                        _LOG.debug(f"✅ Optimistic update was correct: {entity.name}")
+                        _LOG.debug(f"Optimistic update was correct: {entity.name}")
                         
             except Exception as e:
                 _LOG.warning(f"State verification failed for {entity.name}: {e}")
@@ -557,7 +608,7 @@ class SmartThingsEntityFactory:
 
     async def _revert_optimistic_update(self, entity, device_id: str):
         try:
-            _LOG.info(f"🔄 Reverting optimistic update for {entity.name}")
+            _LOG.info(f"Reverting optimistic update for {entity.name}")
             async with self.client:
                 device_status = await self.client.get_device_status(device_id)
                 if device_status:
@@ -565,7 +616,7 @@ class SmartThingsEntityFactory:
                     self.update_entity_attributes(entity, device_status)
                     if old_attributes != entity.attributes:
                         self.api.configured_entities.update_attributes(entity.id, entity.attributes)
-                        _LOG.info(f"↩️ Optimistic update reverted: {entity.name}")
+                        _LOG.info(f"Optimistic update reverted: {entity.name}")
         except Exception as e:
             _LOG.error(f"Error reverting optimistic update: {e}")
 
@@ -588,4 +639,15 @@ class SmartThingsEntityFactory:
                 if cmd_id == 'on':
                     capability, command = 'switch', 'on'
                 elif cmd_id == 'off':
-                    capability, command = 'switch', 'off
+                    capability, command = 'switch', 'off'
+                elif cmd_id == 'toggle':
+                    current_state = entity.attributes.get(SwitchAttr.STATE)
+                    if current_state == SwitchStates.ON:
+                        capability, command = 'switch', 'off'
+                    else:
+                        capability, command = 'switch', 'on'
+        
+        elif entity_type == EntityType.LIGHT:
+            if cmd_id == 'on':
+                capability, command = 'switch', 'on'
+            elif cmd_id == 'off

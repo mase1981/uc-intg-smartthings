@@ -15,8 +15,9 @@ from ucapi.api_definitions import (
     IntegrationSetupError
 )
 
-from uc_intg_smartthings.client import SmartThingsClient, SmartThingsAPIError, SmartThingsDevice
-from uc_intg_smartthings.config import ConfigManager, validate_smartthings_token, get_recommended_polling_settings
+# Direct imports for PyInstaller flat structure
+from client import SmartThingsClient, SmartThingsAPIError, SmartThingsDevice
+from config import ConfigManager, validate_smartthings_token, get_recommended_polling_settings
 
 _LOG = logging.getLogger(__name__)
 
@@ -158,7 +159,7 @@ class SmartThingsSetupFlow:
                 "label": {"en": "Error"},
                 "field": {
                     "label": {
-                        "value": {"en": f"⚠️ {error_message}"}
+                        "value": {"en": f"Warning: {error_message}"}
                     }
                 }
             })
@@ -173,10 +174,10 @@ class SmartThingsSetupFlow:
                              "2. Click 'Generate new token'\n"
                              "3. Enter a name: 'UC Remote Integration'\n"
                              "4. Select these permissions:\n"
-                             "   ✅ Devices: List, See, Control all devices\n"
-                             "   ✅ Locations: See all locations\n"
-                             "   ✅ Apps: List, See, Manage all apps\n"
-                             "   ✅ Scenes: List, See, Control all scenes\n"
+                             "   - Devices: List, See, Control all devices\n"
+                             "   - Locations: See all locations\n"
+                             "   - Apps: List, See, Manage all apps\n"
+                             "   - Scenes: List, See, Control all scenes\n"
                              "5. Click 'Generate token'\n"
                              "6. Copy the token and paste it above"
                     }
@@ -231,7 +232,7 @@ class SmartThingsSetupFlow:
             "label": {"en": "Selected Location"},
             "field": {
                 "label": {
-                    "value": {"en": f"📍 {self.setup_state.get('location_name', 'Unknown Location')}\n🔍 Found {len(devices_raw)} devices"}
+                    "value": {"en": f"Location: {self.setup_state.get('location_name', 'Unknown Location')}\nDevices Found: {len(devices_raw)}"}
                 }
             }
         })
@@ -260,7 +261,7 @@ class SmartThingsSetupFlow:
                         "label": {"en": " "},
                         "field": {
                             "label": {
-                                "value": {"en": f"   🔹 {examples_text}"}
+                                "value": {"en": f"   - {examples_text}"}
                             }
                         }
                     })
@@ -273,7 +274,7 @@ class SmartThingsSetupFlow:
                 "label": {"en": "Smart Polling Settings"},
                 "field": {
                     "label": {
-                        "value": {"en": "⚡ Configure how often device states are checked"}
+                        "value": {"en": "Configure how often device states are checked"}
                     }
                 }
             },

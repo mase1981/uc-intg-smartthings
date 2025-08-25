@@ -1,8 +1,8 @@
 """
-Main SmartThings Integration Driver for Unfolded Circle Remote 2/3
+Enhanced SmartThings Integration Driver with improved state synchronization.
 
 :copyright: (c) 2025 by Meir Miyara
-:license: MPL-2.0, see LICENSE for more details
+:license: MPL-2.0, see LICENSE for more details.
 """
 
 import asyncio
@@ -22,7 +22,6 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 _LOG = logging.getLogger(__name__)
 
 class SmartThingsIntegration:
-    """Main SmartThings integration class with enhanced polling."""
     
     def __init__(self, api: IntegrationAPI, loop: asyncio.AbstractEventLoop):
         self.api = api
@@ -36,12 +35,13 @@ class SmartThingsIntegration:
         
         self.entity_last_poll = {}
         self.entity_last_change = {}
+        self.entity_last_command = {}
         self.subscribed_entities = set()
+        self.polling_active = False
         
         self._register_event_handlers()
         
     def _register_event_handlers(self):
-        """Register event handlers for UC Remote events."""
         @self.api.listens_to(Events.CONNECT)
         async def on_connect():
             _LOG.info("Connected to UC Remote")
@@ -56,7 +56,6 @@ class SmartThingsIntegration:
 
         @self.api.listens_to(Events.SUBSCRIBE_ENTITIES)
         async def on_subscribe_entities(entity_ids: List[str]):
-            """Enhanced handler with smart polling and initial state sync."""
             _LOG.info(f"Remote subscribed to {len(entity_ids)} entities. Starting enhanced polling...")
             
             if not self.client or not self.factory:
@@ -65,7 +64,7 @@ class SmartThingsIntegration:
             
             self.subscribed_entities = {eid for eid in entity_ids if eid.startswith("st_")}
             
-            await self._sync_initial_state_batch(list(self.subscribed_entities))
+            await self._sync_initial_state_immediate(list(self.subscribed_entities))
             await self._start_enhanced_polling()
             
     async def setup_handler(self, msg: SetupDriver) -> Any:
@@ -135,63 +134,101 @@ class SmartThingsIntegration:
         except Exception as e:
             _LOG.error(f"Failed to create entities: {e}", exc_info=True)
 
-    async def _sync_initial_state_batch(self, entity_ids: List[str]):
-        """Sync initial state for subscribed entities using batch processing."""
+    async def _sync_initial_state_immediate(self, entity_ids: List[str]):
         _LOG.info(f"Syncing initial state for {len(entity_ids)} entities...")
         
-        device_ids = [eid[3:] for eid in entity_ids]
-        
+        import time
+        start_time = time.time()
         synced_count = 0
-        for device_id in device_ids:
-            entity_id = f"st_{device_id}"
-            entity = self.api.configured_entities.get(entity_id)
-            if not entity:
-                continue
-                
-            try:
-                async with self.client:
-                    device_status = await self.client.get_device_status(device_id)
-                    if device_status:
-                        self.factory.update_entity_attributes(entity, device_status)
-                        self.api.configured_entities.update_attributes(entity.id, entity.attributes)
-                        synced_count += 1
-                        _LOG.debug(f"Initial sync: {entity.name} -> {entity.attributes}")
-            except Exception as e:
-                _LOG.error(f"Failed to sync initial state for {entity_id}: {e}")
         
-        _LOG.info(f"Initial state synced for {synced_count} entities")
+        batch_size = 4
+        for i in range(0, len(entity_ids), batch_size):
+            batch = entity_ids[i:i + batch_size]
+            
+            tasks = []
+            for entity_id in batch:
+                entity = self.api.configured_entities.get(entity_id)
+                if entity:
+                    device_id = entity_id[3:]
+                    tasks.append(self._sync_single_entity(entity, device_id))
+            
+            if tasks:
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                for result in results:
+                    if result is True:
+                        synced_count += 1
+            
+            if i + batch_size < len(entity_ids):
+                await asyncio.sleep(0.2)
+        
+        sync_time = time.time() - start_time
+        _LOG.info(f"Initial state synced for {synced_count}/{len(entity_ids)} entities in {sync_time:.1f}s")
+
+    async def _sync_single_entity(self, entity, device_id: str) -> bool:
+        try:
+            async with self.client:
+                device_status = await self.client.get_device_status(device_id)
+                
+            if device_status:
+                old_attributes = dict(entity.attributes)
+                self.factory.update_entity_attributes(entity, device_status)
+                
+                self.api.configured_entities.update_attributes(entity.id, entity.attributes)
+                
+                if old_attributes != entity.attributes:
+                    _LOG.info(f"🔄 Initial sync: {entity.name} -> {entity.attributes}")
+                else:
+                    _LOG.debug(f"✅ Initial sync: {entity.name} (no change)")
+                
+                return True
+                
+        except Exception as e:
+            _LOG.error(f"Failed to sync {entity.id}: {e}")
+            return False
 
     async def _start_enhanced_polling(self):
-        """Start enhanced polling with adaptive intervals."""
         if self.status_update_task and not self.status_update_task.done():
             _LOG.debug("Enhanced polling already running")
             return
         
+        self.polling_active = True
         self.status_update_task = self.loop.create_task(self._enhanced_polling_loop())
-        _LOG.info("Enhanced polling started with adaptive intervals")
+        _LOG.info("Enhanced polling started with improved sync")
     
     async def _enhanced_polling_loop(self):
-        """Enhanced polling loop with smart intervals based on entity activity."""
-        while True:
+        consecutive_errors = 0
+        max_consecutive_errors = 5
+        
+        while self.polling_active:
             try:
                 if not self.subscribed_entities:
                     await asyncio.sleep(10)
                     continue
                 
-                await self._smart_poll_entities()
+                await self._smart_poll_entities_enhanced()
                 
-                sleep_time = self._calculate_dynamic_sleep()
+                consecutive_errors = 0
+                
+                sleep_time = self._calculate_dynamic_sleep_enhanced()
                 await asyncio.sleep(sleep_time)
                 
             except asyncio.CancelledError:
                 _LOG.info("Enhanced polling loop cancelled")
                 break
             except Exception as e:
-                _LOG.error(f"Error in enhanced polling loop: {e}", exc_info=True)
-                await asyncio.sleep(30)
+                consecutive_errors += 1
+                _LOG.error(f"Error in enhanced polling loop (#{consecutive_errors}): {e}")
+                
+                if consecutive_errors >= max_consecutive_errors:
+                    _LOG.error(f"Too many consecutive errors ({consecutive_errors}), stopping polling")
+                    break
+                
+                error_sleep = min(30, 5 * consecutive_errors)
+                await asyncio.sleep(error_sleep)
+        
+        self.polling_active = False
 
-    async def _smart_poll_entities(self):
-        """Smart polling with priority-based intervals."""
+    async def _smart_poll_entities_enhanced(self):
         import time
         now = time.time()
         entities_to_poll = []
@@ -205,41 +242,45 @@ class SmartThingsIntegration:
             
             last_poll = self.entity_last_poll.get(entity_id, 0)
             last_change = self.entity_last_change.get(entity_id, 0)
+            last_command = self.entity_last_command.get(entity_id, 0)
             
-            if now - last_change < 60:
-                required_interval = 3
+            if now - last_command < 30:
+                required_interval = 2
+            elif now - last_change < 60:
+                required_interval = 4
             elif now - last_change < 300:
                 required_interval = 8
             else:
                 required_interval = 20
             
             if now - last_poll >= required_interval:
-                entities_to_poll.append((entity_id, device_id))
+                entities_to_poll.append((entity_id, device_id, entity))
         
         if not entities_to_poll:
             return
         
         _LOG.debug(f"Smart polling {len(entities_to_poll)} entities")
         
-        batch_size = 8
+        batch_size = 5
+        changes_detected = 0
+        
         for i in range(0, len(entities_to_poll), batch_size):
             batch = entities_to_poll[i:i + batch_size]
-            await self._poll_entity_batch(batch)
+            batch_changes = await self._poll_entity_batch_enhanced(batch)
+            changes_detected += batch_changes
             
             if i + batch_size < len(entities_to_poll):
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(0.3)
+        
+        if changes_detected > 0:
+            _LOG.info(f"Detected {changes_detected} state changes in batch")
 
-    async def _poll_entity_batch(self, entity_batch):
-        """Poll a batch of entities efficiently."""
+    async def _poll_entity_batch_enhanced(self, entity_batch):
         import time
         now = time.time()
         changes_detected = 0
         
-        for entity_id, device_id in entity_batch:
-            entity = self.api.configured_entities.get(entity_id)
-            if not entity:
-                continue
-            
+        for entity_id, device_id, entity in entity_batch:
             try:
                 old_attributes = dict(entity.attributes)
                 
@@ -248,53 +289,72 @@ class SmartThingsIntegration:
                     
                 if device_status:
                     self.factory.update_entity_attributes(entity, device_status)
-                    
                     self.entity_last_poll[entity_id] = now
                     
                     if old_attributes != entity.attributes:
                         changes_detected += 1
                         self.entity_last_change[entity_id] = now
-                        
-                        self.api.configured_entities.update_attributes(entity.id, entity.attributes)
                         _LOG.info(f"State changed: {entity.name}")
-                    else:
-                        _LOG.debug(f"No change: {entity.name}")
+                    
+                    self.api.configured_entities.update_attributes(entity.id, entity.attributes)
+                    
+                else:
+                    _LOG.debug(f"No status data for {entity.name}")
                         
             except Exception as e:
                 _LOG.warning(f"Failed to poll {entity_id}: {e}")
         
-        if changes_detected > 0:
-            _LOG.info(f"Detected {changes_detected} state changes in batch")
+        return changes_detected
 
-    def _calculate_dynamic_sleep(self) -> float:
-        """Calculate dynamic sleep based on recent activity."""
+    def _calculate_dynamic_sleep_enhanced(self) -> float:
         import time
         now = time.time()
         
+        recent_commands = sum(1 for last_cmd in self.entity_last_command.values() 
+                             if now - last_cmd < 120)
         recent_changes = sum(1 for last_change in self.entity_last_change.values() 
-                           if now - last_change < 300)
+                            if now - last_change < 300)
         
-        if recent_changes > 5:
+        total_activity = recent_commands + recent_changes
+        
+        if recent_commands > 0:
+            return 0.5
+        elif total_activity > 8:
             return 1.0
-        elif recent_changes > 2:
+        elif total_activity > 4:
             return 2.0
+        elif total_activity > 1:
+            return 3.0
         else:
-            return 4.0
+            return 5.0
+
+    def track_entity_command(self, entity_id: str):
+        import time
+        self.entity_last_command[entity_id] = time.time()
+        _LOG.debug(f"Tracked command for {entity_id}")
 
     async def _cleanup(self):
-        """Enhanced cleanup with better task management."""
+        self.polling_active = False
+        
         if self.status_update_task and not self.status_update_task.done():
             self.status_update_task.cancel()
             try:
                 await self.status_update_task
             except asyncio.CancelledError:
                 pass
+        
+        if self.factory:
+            for task in self.factory.state_sync_tasks.values():
+                if not task.done():
+                    task.cancel()
+            self.factory.state_sync_tasks.clear()
                 
         if self.client: 
             await self.client.close()
         
         self.entity_last_poll.clear()
         self.entity_last_change.clear()
+        self.entity_last_command.clear()
         self.subscribed_entities.clear()
             
         _LOG.info("Integration cleanup completed")

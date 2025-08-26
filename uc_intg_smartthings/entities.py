@@ -487,44 +487,42 @@ class SmartThingsEntityFactory:
             self.command_in_progress[device_id] = False
 
     async def _verify_command_result(self, entity, device_id: str, cmd_id: str):
-        """Verify command result with smart timing"""
+        """Smart verification that respects rate limits"""
         try:
-            # Fast check after 400ms
-            await asyncio.sleep(0.4)
+            # Skip verification if we're hitting rate limits - let polling handle it
+            if hasattr(self.client, '_last_rate_limit') and time.time() - self.client._last_rate_limit < 30:
+                _LOG.info(f"Skipping verification due to recent rate limit, polling will catch up: {entity.name}")
+                return
+                
+            # Single verification attempt after 2 seconds to give device time to respond
+            await asyncio.sleep(2.0)
             
-            async with self.client:
-                device_status = await self.client.get_device_status(device_id)
-                
-            if device_status:
-                old_attributes = dict(entity.attributes)
-                self.update_entity_attributes(entity, device_status)
-                
-                if old_attributes != entity.attributes:
-                    # State changed, update UI immediately
-                    self.api.configured_entities.update_attributes(entity.id, entity.attributes)
-                    _LOG.info(f"Fast verification success: {entity.name} -> {entity.attributes}")
-                    return
-            
-            # If no change yet, wait a bit more and try again
-            await asyncio.sleep(0.8)  # Total delay now 1.2s
-            
-            async with self.client:
-                device_status = await self.client.get_device_status(device_id)
-                
-            if device_status:
-                old_attributes = dict(entity.attributes)
-                self.update_entity_attributes(entity, device_status)
-                
-                if old_attributes != entity.attributes:
-                    self.api.configured_entities.update_attributes(entity.id, entity.attributes)
-                    _LOG.info(f"Delayed verification success: {entity.name} -> {entity.attributes}")
+            try:
+                async with self.client:
+                    device_status = await self.client.get_device_status(device_id)
+                    
+                if device_status:
+                    old_attributes = dict(entity.attributes)
+                    self.update_entity_attributes(entity, device_status)
+                    
+                    if old_attributes != entity.attributes:
+                        self.api.configured_entities.update_attributes(entity.id, entity.attributes)
+                        _LOG.info(f"Command verification success: {entity.name} -> {entity.attributes}")
+                    else:
+                        _LOG.debug(f"No state change yet for {entity.name}, polling will catch up")
                 else:
-                    _LOG.warning(f"No state change detected for {entity.name} after command {cmd_id}")
-            else:
-                _LOG.warning(f"No device status returned for {entity.name}")
+                    _LOG.debug(f"No status returned for {entity.name}, polling will catch up")
+                    
+            except Exception as e:
+                if "429" in str(e):
+                    _LOG.info(f"Rate limited during verification for {entity.name}, polling will catch up")
+                    # Mark rate limit so future commands can skip verification
+                    self.client._last_rate_limit = time.time()
+                else:
+                    _LOG.warning(f"Verification failed for {entity.name}: {e}")
                         
         except Exception as e:
-            _LOG.error(f"Command verification failed for {entity.name}: {e}")
+            _LOG.error(f"Command verification error for {entity.name}: {e}")
 
     def _map_command(self, entity_type: str, cmd_id: str, params: Dict[str, Any], entity, capabilities: set) -> tuple:
         capability = command = args = None

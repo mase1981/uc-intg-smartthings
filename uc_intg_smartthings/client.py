@@ -149,17 +149,22 @@ class SmartThingsClient:
         
         self._device_cache: Dict[str, Dict[str, Any]] = {}
         self._cache_timestamps: Dict[str, float] = {}
-        self._cache_ttl = 20.0  # Increased cache TTL for better performance
+        self._cache_ttl = 30.0  # Longer cache for rate limit compliance
         
-        self._connection_pool_limit = 8  # Reduced pool limit
-        self._request_timeout = 10  # Reduced timeout for faster failures
-        self._max_retries = 1  # Reduced retries for synchronous commands
-        self._retry_delays = [0.8]  # Single shorter retry delay
+        self._connection_pool_limit = 4  # Much smaller pool
+        self._request_timeout = 8
+        self._max_retries = 0  # No retries to avoid rate limit stacking
         
         self._request_count = 0
         self._cache_hits = 0
         self._connection_errors = 0
         self._session_creation_lock = asyncio.Lock()
+        
+        # Rate limiting
+        self._request_times = []  # Track request timestamps
+        self._rate_limit_window = 10  # 10 second window
+        self._max_requests_per_window = 8  # Conservative limit (SmartThings allows 10)
+        self._last_rate_limit = 0  # Track when we last hit 429
 
     def _create_ssl_context(self) -> ssl.SSLContext:
         """Create SSL context with proper certificate verification for UC Remote."""
@@ -222,9 +227,31 @@ class SmartThingsClient:
             self._session = None
             _LOG.debug("SmartThings API session closed")
 
+    async def _check_rate_limit(self):
+        """Check if we're within rate limits, wait if necessary"""
+        now = time.time()
+        
+        # Remove old requests outside the window
+        self._request_times = [t for t in self._request_times if now - t <= self._rate_limit_window]
+        
+        if len(self._request_times) >= self._max_requests_per_window:
+            # Calculate how long to wait
+            oldest_request = min(self._request_times)
+            wait_time = self._rate_limit_window - (now - oldest_request) + 0.1
+            
+            if wait_time > 0:
+                _LOG.info(f"Rate limit approaching, waiting {wait_time:.1f}s")
+                await asyncio.sleep(wait_time)
+        
+        # Record this request
+        self._request_times.append(now)
+
     async def _make_request(self, method: str, endpoint: str, **kwargs) -> Dict[str, Any]:
         if not self._token:
             raise SmartThingsAPIError("No access token provided")
+        
+        # Check rate limits before making request
+        await self._check_rate_limit()
         
         if not self._session or self._session.closed:
             await self.__aenter__()
@@ -236,51 +263,32 @@ class SmartThingsClient:
         
         self._request_count += 1
         
-        for attempt in range(self._max_retries + 1):
-            try:
-                async with self._session.request(method, url, headers=headers, **kwargs) as response:
-                    if response.status >= 400:
-                        error_text = await response.text()
-                        _LOG.error(f"SmartThings API Error {response.status}: {error_text}")
-                        
-                        if response.status == 401:
-                            raise SmartThingsAPIError(
-                                f"API request failed with status {response.status}", 
-                                response.status
-                            )
-                        
-                        if response.status >= 500 and attempt < self._max_retries:
-                            await asyncio.sleep(self._retry_delays[min(attempt, len(self._retry_delays) - 1)])
-                            continue
-                            
-                        raise SmartThingsAPIError(
-                            f"API request failed with status {response.status}", 
-                            response.status
-                        )
-                    
-                    result = await response.json() if response.content_type == 'application/json' else {}
-                    return result
-                    
-            except aiohttp.ClientError as e:
-                self._connection_errors += 1
-                _LOG.warning(f"SmartThings HTTP Client Error (attempt {attempt + 1}): {e}")
+        try:
+            async with self._session.request(method, url, headers=headers, **kwargs) as response:
+                if response.status == 429:
+                    self._last_rate_limit = time.time()
+                    error_text = await response.text()
+                    _LOG.warning(f"Hit SmartThings rate limit: {error_text}")
+                    raise SmartThingsAPIError(f"Rate limit exceeded", 429)
                 
-                if attempt < self._max_retries:
-                    await asyncio.sleep(self._retry_delays[min(attempt, len(self._retry_delays) - 1)])
-                    # Try to recreate session on connection error
-                    try:
-                        await self._create_session()
-                    except Exception as session_error:
-                        _LOG.warning(f"Failed to recreate session: {session_error}")
-                    continue
+                if response.status >= 400:
+                    error_text = await response.text()
+                    _LOG.error(f"SmartThings API Error {response.status}: {error_text}")
+                    raise SmartThingsAPIError(
+                        f"API request failed with status {response.status}", 
+                        response.status
+                    )
                 
-                raise SmartThingsAPIError(f"Connection error after {self._max_retries + 1} attempts: {e}")
-            except asyncio.TimeoutError:
-                _LOG.warning(f"SmartThings API Timeout (attempt {attempt + 1})")
-                if attempt < self._max_retries:
-                    await asyncio.sleep(self._retry_delays[min(attempt, len(self._retry_delays) - 1)])
-                    continue
-                raise SmartThingsAPIError(f"Request timeout after {self._max_retries + 1} attempts")
+                result = await response.json() if response.content_type == 'application/json' else {}
+                return result
+                
+        except aiohttp.ClientError as e:
+            self._connection_errors += 1
+            _LOG.warning(f"SmartThings HTTP Client Error: {e}")
+            raise SmartThingsAPIError(f"Connection error: {e}")
+        except asyncio.TimeoutError:
+            _LOG.warning(f"SmartThings API Timeout")
+            raise SmartThingsAPIError(f"Request timeout")
 
     async def get_locations(self) -> List[Dict[str, Any]]:
         """Get user's SmartThings locations."""

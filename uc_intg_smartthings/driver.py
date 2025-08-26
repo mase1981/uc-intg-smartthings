@@ -330,22 +330,28 @@ class SmartThingsIntegration:
             return base_interval
 
     def _calculate_polling_interval(self) -> float:
-        """Calculate dynamic polling interval based on current activity"""
+        """Calculate dynamic polling interval based on rate limits and activity"""
         
-        # If devices are executing commands, slow down polling
+        # Much slower polling to avoid rate limits
         if self.devices_in_command:
-            return 8.0  # Slower when commands active
+            return 15.0  # Very slow when commands active to let verification work
         
-        # Normal polling intervals
+        # Check if we've hit rate limits recently
+        if (hasattr(self.client, '_last_rate_limit') and 
+            time.time() - self.client._last_rate_limit < 60):
+            return 25.0  # Extra slow if recent rate limits
+        
+        # Normal slow polling to stay under rate limits
         base_config = self.config.get("polling_interval", 12)
         entity_count = len(self.subscribed_entities)
         
-        if entity_count <= 5:
-            return max(base_config * 0.6, 3)
-        elif entity_count <= 20:
-            return base_config
+        # Much more conservative polling
+        if entity_count <= 3:
+            return max(base_config * 2, 15)  # Minimum 15 seconds
+        elif entity_count <= 10:
+            return max(base_config * 3, 20)  # Minimum 20 seconds
         else:
-            return min(base_config * 1.5, 20)
+            return max(base_config * 4, 30)  # Minimum 30 seconds for many entities
 
     def track_device_command(self, entity_id: str):
         """Track when a device starts/stops command execution"""

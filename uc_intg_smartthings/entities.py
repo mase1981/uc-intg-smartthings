@@ -1,5 +1,5 @@
 """
-SmartThings Entity Factory for UC Remote
+SmartThings Entity Factory for UC Remote - Enhanced Device Detection
 
 :copyright: (c) 2025 by Meir Miyara
 :license: MPL-2.0, see LICENSE for more details.
@@ -46,54 +46,80 @@ class SmartThingsEntityFactory:
     def determine_entity_type(self, device: SmartThingsDevice) -> Optional[str]:
         capabilities = device.capabilities
         device_name = (device.label or device.name or "").lower()
+        device_type = getattr(device, 'type', '').lower()
         
+        _LOG.info(f"Analyzing device: {device.label}")
+        _LOG.info(f"  - Capabilities: {list(capabilities)}")
+        _LOG.info(f"  - Device Type: {device_type}")
+        _LOG.info(f"  - Device Name: {device_name}")
+        
+        # Enhanced Samsung device detection
+        if self._is_samsung_tv(device_name, device_type, capabilities):
+            _LOG.info(f"Samsung TV detected: {device.label} -> MEDIA_PLAYER")
+            return EntityType.MEDIA_PLAYER
+            
+        if self._is_samsung_soundbar(device_name, device_type, capabilities):
+            _LOG.info(f"Samsung Soundbar detected: {device.label} -> MEDIA_PLAYER")
+            return EntityType.MEDIA_PLAYER
+        
+        # Button detection
         if "button" in capabilities or "momentary" in capabilities:
             _LOG.info(f"Button {device.label} -> BUTTON (has button capability)")
             return EntityType.BUTTON
         
+        # Climate detection
         climate_caps = {"thermostat", "thermostatCoolingSetpoint", "thermostatHeatingSetpoint", "airConditioner"}
         if climate_caps.intersection(capabilities):
             _LOG.info(f"Climate {device.label} -> CLIMATE (has {climate_caps.intersection(capabilities)})")
             return EntityType.CLIMATE
         
-        media_caps = {"mediaPlayback", "audioVolume", "tvChannel", "mediaTrackControl"}
-        if media_caps.intersection(capabilities):
-            _LOG.info(f"Media {device.label} -> MEDIA_PLAYER (has {media_caps.intersection(capabilities)})")
+        # Media player detection
+        media_caps = {"mediaPlayback", "audioVolume", "tvChannel", "mediaTrackControl", "speechSynthesis"}
+        media_keywords = ["tv", "television", "soundbar", "speaker", "audio", "receiver", "stereo", "music"]
+        
+        if (media_caps.intersection(capabilities) or 
+            any(keyword in device_name for keyword in media_keywords) or
+            any(keyword in device_type for keyword in media_keywords)):
+            _LOG.info(f"Media Player {device.label} -> MEDIA_PLAYER (caps: {media_caps.intersection(capabilities)}, name match: {any(keyword in device_name for keyword in media_keywords)})")
             return EntityType.MEDIA_PLAYER
         
+        # Cover detection
         cover_caps = {"doorControl", "windowShade", "garageDoorControl"}
         if cover_caps.intersection(capabilities):
             _LOG.info(f"Cover {device.label} -> COVER (has {cover_caps.intersection(capabilities)})")
             return EntityType.COVER
         
+        # Lock detection (as switch)
         if "lock" in capabilities and "switch" not in capabilities:
             _LOG.info(f"Lock {device.label} -> SWITCH (lock as switch for control)")
             return EntityType.SWITCH
         
+        # Light detection
         light_caps = {"switchLevel", "colorControl", "colorTemperature"}
         light_indicators = light_caps.intersection(capabilities)
+        light_keywords = ["light", "lamp", "bulb", "led", "fixture", "sconce", "chandelier", "dimmer"]
         
-        if light_indicators:
+        if light_indicators or ("switch" in capabilities and any(word in device_name for word in light_keywords)):
             excluded_caps = {
                 "lock", "doorControl", "windowShade", "garageDoorControl",
-                "thermostat", "mediaPlayback", "audioVolume",
+                "thermostat", "mediaPlayback", "audioVolume", "speechSynthesis",
                 "dryerOperatingState", "washerOperatingState", "ovenOperatingState"
             }
             if not excluded_caps.intersection(capabilities):
-                _LOG.info(f"Light {device.label} -> LIGHT (has {light_indicators})")
+                if light_indicators:
+                    _LOG.info(f"Light {device.label} -> LIGHT (has {light_indicators})")
+                else:
+                    _LOG.info(f"Light {device.label} -> LIGHT (name contains light keyword)")
                 return EntityType.LIGHT
         
-        light_keywords = ["light", "lamp", "bulb", "led", "fixture", "sconce", "chandelier"]
-        if "switch" in capabilities and any(word in device_name for word in light_keywords):
-            _LOG.info(f"Light {device.label} -> LIGHT (name contains light keyword)")
-            return EntityType.LIGHT
-        
+        # Sensor detection
         sensor_caps = {
             "contactSensor", "motionSensor", "presenceSensor", 
             "temperatureMeasurement", "relativeHumidityMeasurement",
             "illuminanceMeasurement", "battery", "powerMeter", "energyMeter",
             "carbonMonoxideDetector", "smokeDetector", "waterSensor",
-            "accelerationSensor", "threeAxis", "ultravioletIndex"
+            "accelerationSensor", "threeAxis", "ultravioletIndex",
+            "soundSensor", "dustSensor", "airQualitySensor"
         }
         
         sensor_matches = sensor_caps.intersection(capabilities)
@@ -101,27 +127,69 @@ class SmartThingsEntityFactory:
             _LOG.info(f"Sensor {device.label} -> SENSOR (has {sensor_matches})")
             return EntityType.SENSOR
         
+        # Basic switch detection (fallback)
         if "switch" in capabilities:
             excluded_caps = {
                 "switchLevel", "colorControl", "colorTemperature",
                 "doorControl", "windowShade", "garageDoorControl",
                 "thermostat", "thermostatCoolingSetpoint", "thermostatHeatingSetpoint",
-                "mediaPlayback", "audioVolume", "button"
+                "mediaPlayback", "audioVolume", "speechSynthesis", "button"
             }
             
             if not excluded_caps.intersection(capabilities):
                 _LOG.info(f"Switch {device.label} -> SWITCH (basic switch capability)")
                 return EntityType.SWITCH
         
-        _LOG.warning(f"Unknown {device.label} -> NO TYPE DETECTED (capabilities: {capabilities})")
+        _LOG.warning(f"Unknown device type for {device.label}")
+        _LOG.warning(f"  - Capabilities: {capabilities}")
+        _LOG.warning(f"  - Device Type: {device_type}")
+        _LOG.warning(f"  - Device Name: {device_name}")
         return None
+
+    def _is_samsung_tv(self, device_name: str, device_type: str, capabilities: set) -> bool:
+        """Enhanced Samsung TV detection"""
+        samsung_tv_indicators = [
+            # Direct name matches
+            "samsung" and "tv" in device_name,
+            "samsung" and any(model in device_name for model in ["au5000", "q70", "qled", "neo"]),
+            # Device type matches
+            "tv" in device_type,
+            "television" in device_type,
+            # Capability patterns common to Samsung TVs
+            {"switch", "audioVolume"}.issubset(capabilities),
+            {"switch", "speechSynthesis"}.issubset(capabilities),
+        ]
+        
+        return any(samsung_tv_indicators)
+
+    def _is_samsung_soundbar(self, device_name: str, device_type: str, capabilities: set) -> bool:
+        """Enhanced Samsung Soundbar detection"""
+        samsung_soundbar_indicators = [
+            # Direct name matches
+            "samsung" and "soundbar" in device_name,
+            "samsung" and "q70t" in device_name,
+            "soundbar" in device_name,
+            # Device type matches
+            "soundbar" in device_type,
+            "speaker" in device_type and "samsung" in device_name,
+            # Capability patterns common to Samsung soundbars
+            {"audioVolume", "switch"}.issubset(capabilities),
+            "audioVolume" in capabilities and "mediaPlayback" not in capabilities,
+        ]
+        
+        return any(samsung_soundbar_indicators)
 
     def create_entity(self, device_data: Dict[str, Any], config: Dict[str, Any], area: Optional[str] = None) -> Optional[Union[Light, Switch, Sensor, Cover, Button, MediaPlayer, Climate]]:
         try:
             device = SmartThingsDevice(**device_data)
             entity_type = self.determine_entity_type(device)
 
+            if not entity_type:
+                _LOG.warning(f"Could not determine entity type for {device.label}")
+                return None
+
             if not self._should_include(entity_type, config):
+                _LOG.info(f"Excluding {device.label} - {entity_type} not enabled in config")
                 return None
 
             entity_id = f"st_{device.id}"
@@ -157,8 +225,10 @@ class SmartThingsEntityFactory:
                 initial_attributes = self._get_default_attributes(entity_type, device.capabilities)
                 entity.attributes.update(initial_attributes)
                 
-                _LOG.info(f"Created {entity_type} entity: {entity_id} ({label})")
+                _LOG.info(f"Successfully created {entity_type} entity: {entity_id} ({label})")
                 return entity
+            else:
+                _LOG.error(f"Failed to create entity for {label}")
                 
         except Exception as e:
             device_name = device_data.get("label", device_data.get("name", "Unknown"))
@@ -287,7 +357,17 @@ class SmartThingsEntityFactory:
         if "mediaPlayback" in device.capabilities:
             features.extend([MediaFeatures.PLAY_PAUSE, MediaFeatures.STOP])
         
+        # Enhanced device class detection for Samsung devices
         device_class = MediaClasses.SPEAKER
+        device_name = (device.label or device.name or "").lower()
+        device_type = getattr(device, 'type', '').lower()
+        
+        if any(word in device_name for word in ["tv", "television"]) or "tv" in device_type:
+            device_class = MediaClasses.TV
+        elif any(word in device_name for word in ["soundbar", "q70t"]) or "soundbar" in device_type:
+            device_class = MediaClasses.SPEAKER
+        elif any(word in device_name for word in ["receiver", "amplifier"]):
+            device_class = MediaClasses.RECEIVER
         
         return MediaPlayer(entity_id, name, features, {}, device_class=device_class, area=area, cmd_handler=self._handle_command)
 
@@ -410,6 +490,15 @@ class SmartThingsEntityFactory:
             switch_value = main_component["switch"].get("switch", {}).get("value")
             if switch_value:
                 entity.attributes[MediaAttr.STATE] = MediaStates.ON if switch_value == "on" else MediaStates.OFF
+        
+        if "audioVolume" in main_component:
+            volume_value = main_component["audioVolume"].get("volume", {}).get("value")
+            if volume_value is not None:
+                entity.attributes[MediaAttr.VOLUME] = int(volume_value)
+            
+            mute_value = main_component["audioVolume"].get("mute", {}).get("value")
+            if mute_value is not None:
+                entity.attributes[MediaAttr.MUTED] = mute_value == "muted"
 
     def _update_climate_attributes(self, entity: Climate, main_component: Dict[str, Any]):
         if "thermostat" in main_component:

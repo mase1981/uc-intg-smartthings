@@ -1,5 +1,5 @@
 """
-Enhanced SmartThings integration setup flow with corrected device detection.
+Enhanced SmartThings integration setup flow with improved device detection.
 
 :copyright: (c) 2025 by Meir Miyara
 :license: MPL-2.0, see LICENSE for more details
@@ -23,46 +23,123 @@ _LOG = logging.getLogger(__name__)
 class DeviceAnalyzer:
     
     @staticmethod
-    def determine_entity_type(capabilities: set, device_name: str) -> Optional[str]:
+    def determine_entity_type(capabilities: set, device_name: str, device_type: str = "") -> Optional[str]:
         device_name_lower = device_name.lower()
+        device_type_lower = device_type.lower()
         
+        _LOG.debug(f"Analyzing device: {device_name}")
+        _LOG.debug(f"  Capabilities: {capabilities}")
+        _LOG.debug(f"  Device Type: {device_type}")
+        
+        if DeviceAnalyzer._is_samsung_tv(device_name_lower, device_type_lower, capabilities):
+            _LOG.info(f"Samsung TV detected: {device_name} -> media_player")
+            return "media_player"
+            
+        if DeviceAnalyzer._is_samsung_soundbar(device_name_lower, device_type_lower, capabilities):
+            _LOG.info(f"Samsung Soundbar detected: {device_name} -> media_player") 
+            return "media_player"
+        
+        # Button detection
+        if "button" in capabilities or "momentary" in capabilities:
+            return "button"
+        
+        # Climate detection
+        climate_caps = {"thermostat", "thermostatCoolingSetpoint", "thermostatHeatingSetpoint", "airConditioner"}
+        if climate_caps.intersection(capabilities):
+            return "climate"
+        
+        # Media player detection
+        media_caps = {"mediaPlayback", "audioVolume", "tvChannel", "mediaTrackControl", "speechSynthesis"}
+        media_keywords = ["tv", "television", "soundbar", "speaker", "audio", "receiver", "stereo", "music"]
+        
+        if (media_caps.intersection(capabilities) or 
+            any(keyword in device_name_lower for keyword in media_keywords) or
+            any(keyword in device_type_lower for keyword in media_keywords)):
+            return "media_player"
+        
+        # Cover detection
+        cover_caps = {"doorControl", "windowShade", "garageDoorControl"}
+        if cover_caps.intersection(capabilities):
+            return "cover"
+        
+        # Light detection
         light_caps = {"switchLevel", "colorControl", "colorTemperature"}
         if light_caps.intersection(capabilities):
             excluded_caps = {
                 "lock", "doorControl", "windowShade", "garageDoorControl",
-                "thermostat", "mediaPlayback", "audioVolume",
+                "thermostat", "mediaPlayback", "audioVolume", "speechSynthesis",
                 "dryerOperatingState", "washerOperatingState", "ovenOperatingState"
             }
             if not excluded_caps.intersection(capabilities):
                 return "light"
         
+        # Light detection by name
         if "switch" in capabilities and any(word in device_name_lower for word in ["light", "lamp", "bulb", "led"]):
             return "light"
         
+        # Sensor detection
         sensor_caps = {
             "lock", "contactSensor", "motionSensor", "presenceSensor", 
             "temperatureMeasurement", "relativeHumidityMeasurement",
             "battery", "powerMeter", "energyMeter", "illuminanceMeasurement",
             "accelerationSensor", "threeAxis", "ultravioletIndex",
             "carbonMonoxideDetector", "smokeDetector", "waterSensor",
-            "button"
+            "soundSensor", "dustSensor", "airQualitySensor"
         }
         
         if sensor_caps.intersection(capabilities):
             return "sensor"
         
+        # Basic switch detection (fallback)
         if "switch" in capabilities:
             excluded_caps = {
                 "switchLevel", "colorControl", "colorTemperature",
                 "doorControl", "windowShade", "garageDoorControl",  
                 "thermostat", "thermostatCoolingSetpoint", "thermostatHeatingSetpoint",
-                "mediaPlayback", "audioVolume"
+                "mediaPlayback", "audioVolume", "speechSynthesis"
             }
             
             if not excluded_caps.intersection(capabilities):
                 return "switch"
         
+        _LOG.warning(f"Could not determine entity type for {device_name}")
+        _LOG.warning(f"  Capabilities: {capabilities}")
         return None
+
+    @staticmethod
+    def _is_samsung_tv(device_name: str, device_type: str, capabilities: set) -> bool:
+        """Enhanced Samsung TV detection"""
+        samsung_tv_indicators = [
+            # Direct name matches
+            "samsung" in device_name and "tv" in device_name,
+            "samsung" in device_name and any(model in device_name for model in ["au5000", "q70", "qled", "neo"]),
+            # Device type matches
+            "tv" in device_type,
+            "television" in device_type,
+            # Capability patterns common to Samsung TVs
+            {"switch", "audioVolume"}.issubset(capabilities),
+            {"switch", "speechSynthesis"}.issubset(capabilities),
+        ]
+        
+        return any(samsung_tv_indicators)
+
+    @staticmethod
+    def _is_samsung_soundbar(device_name: str, device_type: str, capabilities: set) -> bool:
+        """Enhanced Samsung Soundbar detection"""
+        samsung_soundbar_indicators = [
+            # Direct name matches
+            "samsung" in device_name and "soundbar" in device_name,
+            "samsung" in device_name and "q70t" in device_name,
+            "soundbar" in device_name,
+            # Device type matches
+            "soundbar" in device_type,
+            "speaker" in device_type and "samsung" in device_name,
+            # Capability patterns common to Samsung soundbars
+            {"audioVolume", "switch"}.issubset(capabilities),
+            "audioVolume" in capabilities and "mediaPlayback" not in capabilities,
+        ]
+        
+        return any(samsung_soundbar_indicators)
 
 class SmartThingsSetupFlow:
     
@@ -71,6 +148,7 @@ class SmartThingsSetupFlow:
         self.config_manager = config_manager
         self.setup_state = {}
         self.discovered_devices = []
+        self.client_session = None  # Track client session for proper cleanup
         
     async def handle_setup_request(self, msg: SetupDriver) -> Any:
         try:
@@ -87,6 +165,19 @@ class SmartThingsSetupFlow:
         except Exception as e:
             _LOG.error(f"Setup request handling failed: {e}", exc_info=True)
             return SetupError(IntegrationSetupError.OTHER)
+        finally:
+            # Ensure client cleanup
+            await self._cleanup_client()
+
+    async def _cleanup_client(self):
+        """Properly cleanup client session"""
+        if self.client_session:
+            try:
+                await self.client_session.close()
+                self.client_session = None
+                _LOG.debug("Setup client session cleaned up")
+            except Exception as e:
+                _LOG.warning(f"Error cleaning up setup client: {e}")
 
     async def _handle_initial_setup(self, setup_data: Dict[str, Any], reconfigure: bool = False) -> Any:
         _LOG.info(f"Starting SmartThings setup (reconfigure={reconfigure})")
@@ -107,8 +198,11 @@ class SmartThingsSetupFlow:
         self.setup_state["access_token"] = token
         
         try:
-            async with SmartThingsClient(token) as client:
-                locations = await client.get_locations()
+            # Create and store client session for proper cleanup
+            self.client_session = SmartThingsClient(token)
+            
+            async with self.client_session:
+                locations = await self.client_session.get_locations()
                 
                 if not locations:
                     _LOG.error("No SmartThings locations found")
@@ -121,7 +215,7 @@ class SmartThingsSetupFlow:
                     location = locations[0]
                     self.setup_state["location_id"] = location["locationId"]
                     self.setup_state["location_name"] = location["name"]
-                    return await self._discover_and_configure_devices(client)
+                    return await self._discover_and_configure_devices(self.client_session)
                 else:
                     return self._request_location_selection(locations)
                     
@@ -222,7 +316,7 @@ class SmartThingsSetupFlow:
         devices_raw = await client.get_devices(location_id)
         self.discovered_devices = devices_raw
         
-        device_categories = self._categorize_devices_corrected(devices_raw)
+        device_categories = self._categorize_devices_improved(devices_raw)
         
         settings = []
         
@@ -296,7 +390,7 @@ class SmartThingsSetupFlow:
             settings=settings
         )
 
-    def _categorize_devices_corrected(self, devices_raw: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    def _categorize_devices_improved(self, devices_raw: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
         categories = {
             "light": {"count": 0, "examples": [], "display_name": "Lights"},
             "switch": {"count": 0, "examples": [], "display_name": "Switches"}, 
@@ -304,11 +398,13 @@ class SmartThingsSetupFlow:
             "climate": {"count": 0, "examples": [], "display_name": "Climate"},
             "cover": {"count": 0, "examples": [], "display_name": "Covers & Doors"},
             "media_player": {"count": 0, "examples": [], "display_name": "Media Players"},
+            "button": {"count": 0, "examples": [], "display_name": "Buttons"},
         }
         
         for device_data in devices_raw:
             try:
                 device_name = device_data.get("label") or device_data.get("name") or "Unknown Device"
+                device_type = device_data.get("deviceTypeName", "")
                 
                 capabilities = set()
                 components = device_data.get("components", [])
@@ -319,21 +415,34 @@ class SmartThingsSetupFlow:
                         if cap_id:
                             capabilities.add(cap_id)
                 
-                entity_type = DeviceAnalyzer.determine_entity_type(capabilities, device_name)
+                _LOG.debug(f"Processing device: {device_name}")
+                _LOG.debug(f"  Raw capabilities: {capabilities}")
+                _LOG.debug(f"  Device type: {device_type}")
+                
+                entity_type = DeviceAnalyzer.determine_entity_type(capabilities, device_name, device_type)
                 
                 if entity_type and entity_type in categories:
                     categories[entity_type]["count"] += 1
                     
                     if len(categories[entity_type]["examples"]) < 5:
                         categories[entity_type]["examples"].append(device_name)
-                
-                _LOG.debug(f"Device: {device_name}, Capabilities: {capabilities}, Type: {entity_type}")
+                    
+                    _LOG.info(f"Categorized: {device_name} -> {entity_type}")
+                else:
+                    _LOG.warning(f"Could not categorize device: {device_name} (capabilities: {capabilities})")
                         
             except Exception as e:
                 device_name = device_data.get("label", "Unknown")
-                _LOG.warning(f"Error categorizing device {device_name}: {e}")
+                _LOG.error(f"Error categorizing device {device_name}: {e}", exc_info=True)
         
-        _LOG.info(f"Device categorization summary: Lights={categories['light']['count']}, Switches={categories['switch']['count']}, Sensors={categories['sensor']['count']}")
+        _LOG.info(f"Device categorization summary: "
+                 f"Lights={categories['light']['count']}, "
+                 f"Switches={categories['switch']['count']}, "
+                 f"Sensors={categories['sensor']['count']}, "
+                 f"Media Players={categories['media_player']['count']}, "
+                 f"Climate={categories['climate']['count']}, "
+                 f"Covers={categories['cover']['count']}, "
+                 f"Buttons={categories['button']['count']}")
         
         return categories
 
@@ -352,8 +461,10 @@ class SmartThingsSetupFlow:
             self.setup_state["access_token"] = token
             
             try:
-                async with SmartThingsClient(token) as client:
-                    locations = await client.get_locations()
+                # Create and store client for cleanup
+                self.client_session = SmartThingsClient(token)
+                async with self.client_session:
+                    locations = await self.client_session.get_locations()
                     if not locations:
                         return SetupError(IntegrationSetupError.NOT_FOUND)
                     
@@ -363,7 +474,7 @@ class SmartThingsSetupFlow:
                         location = locations[0]
                         self.setup_state["location_id"] = location["locationId"]
                         self.setup_state["location_name"] = location["name"]
-                        return await self._discover_and_configure_devices(client)
+                        return await self._discover_and_configure_devices(self.client_session)
                     else:
                         return self._request_location_selection(locations)
                         
@@ -386,16 +497,20 @@ class SmartThingsSetupFlow:
             
             try:
                 token = self.setup_state["access_token"]
-                async with SmartThingsClient(token) as client:
-                    return await self._discover_and_configure_devices(client)
+                if not self.client_session:
+                    self.client_session = SmartThingsClient(token)
+                async with self.client_session:
+                    return await self._discover_and_configure_devices(self.client_session)
             except Exception as e:
                 _LOG.error(f"Error discovering devices: {e}")
                 return SetupError(IntegrationSetupError.OTHER)
         
-        if any(key.startswith("include_") for key in input_values.keys()):
+        if any(key.startswith("include_") or key == "polling_interval" for key in input_values.keys()):
             return await self._finalize_setup()
         
-        _LOG.warning("Unexpected user data response state")
+        _LOG.warning("Unexpected user data response state - no matching input pattern")
+        _LOG.warning(f"Input keys: {list(input_values.keys())}")
+        _LOG.warning(f"Setup state keys: {list(self.setup_state.keys())}")
         return SetupError(IntegrationSetupError.OTHER)
 
     async def _handle_user_confirmation(self, confirm: bool) -> Any:
@@ -421,6 +536,7 @@ class SmartThingsSetupFlow:
                 "include_climate": self.setup_state.get("include_climate", True),
                 "include_covers": self.setup_state.get("include_covers", True),
                 "include_media_players": self.setup_state.get("include_media_players", True),
+                "include_buttons": self.setup_state.get("include_buttons", True),
                 
                 "polling_interval": int(self.setup_state.get("polling_interval", 8)),
                 
@@ -452,7 +568,7 @@ class SmartThingsSetupFlow:
     def _create_setup_summary(self, config: Dict[str, Any], device_count: int) -> Dict[str, Any]:
         """Create a setup summary for logging and diagnostics."""
         enabled_types = []
-        for entity_type in ["lights", "switches", "sensors", "climate", "covers", "media_players"]:
+        for entity_type in ["lights", "switches", "sensors", "climate", "covers", "media_players", "buttons"]:
             if config.get(f"include_{entity_type}", False):
                 enabled_types.append(entity_type)
         
@@ -473,8 +589,9 @@ class SmartThingsSetupFlow:
             if not token or not location_id:
                 return False
             
-            async with SmartThingsClient(token) as client:
-                devices = await client.get_devices(location_id)
+            test_client = SmartThingsClient(token)
+            async with test_client:
+                devices = await test_client.get_devices(location_id)
                 _LOG.debug(f"Configuration test successful: {len(devices)} devices accessible")
                 return True
                 

@@ -1,4 +1,5 @@
 """
+SmartThings Entity Factory for UC Remote
 
 :copyright: (c) 2025 by Meir Miyara
 :license: MPL-2.0, see LICENSE for more details.
@@ -16,7 +17,7 @@ from ucapi.sensor import Sensor, Attributes as SensorAttr, States as SensorState
 from ucapi.cover import Cover, Features as CoverFeatures, Attributes as CoverAttr, States as CoverStates, DeviceClasses as CoverClasses
 from ucapi.button import Button, Attributes as ButtonAttr, States as ButtonStates
 from ucapi.media_player import MediaPlayer, Features as MediaFeatures, Attributes as MediaAttr, States as MediaStates, DeviceClasses as MediaClasses
-from ucapi.climate import Climate, Features as ClimateFeatures, Attributes as ClimateAttr, States as ClimateStates
+from ucapi.climate import Climate, Features as ClimateFeatures,Attributes as ClimateAttr, States as ClimateStates
 from ucapi.api_definitions import StatusCodes
 
 from uc_intg_smartthings.client import SmartThingsDevice, SmartThingsClient
@@ -43,44 +44,50 @@ class SmartThingsEntityFactory:
         self.last_real_updates = {}
         self.state_sync_tasks = {}
         self.command_callback = None
-        
-        self.pre_command_states = {}
-        self.expected_states = {}
 
     def determine_entity_type(self, device: SmartThingsDevice) -> Optional[str]:
         capabilities = device.capabilities
         device_name = (device.label or device.name or "").lower()
         
         if "button" in capabilities or "momentary" in capabilities:
+            _LOG.info(f"Button {device.label} -> BUTTON (has button capability)")
             return EntityType.BUTTON
         
         climate_caps = {"thermostat", "thermostatCoolingSetpoint", "thermostatHeatingSetpoint", "airConditioner"}
         if climate_caps.intersection(capabilities):
+            _LOG.info(f"Climate {device.label} -> CLIMATE (has {climate_caps.intersection(capabilities)})")
             return EntityType.CLIMATE
         
         media_caps = {"mediaPlayback", "audioVolume", "tvChannel", "mediaTrackControl"}
         if media_caps.intersection(capabilities):
+            _LOG.info(f"Media {device.label} -> MEDIA_PLAYER (has {media_caps.intersection(capabilities)})")
             return EntityType.MEDIA_PLAYER
         
         cover_caps = {"doorControl", "windowShade", "garageDoorControl"}
         if cover_caps.intersection(capabilities):
+            _LOG.info(f"Cover {device.label} -> COVER (has {cover_caps.intersection(capabilities)})")
             return EntityType.COVER
         
         if "lock" in capabilities and "switch" not in capabilities:
+            _LOG.info(f"Lock {device.label} -> SWITCH (lock as switch for control)")
             return EntityType.SWITCH
         
         light_caps = {"switchLevel", "colorControl", "colorTemperature"}
-        if light_caps.intersection(capabilities):
+        light_indicators = light_caps.intersection(capabilities)
+        
+        if light_indicators:
             excluded_caps = {
                 "lock", "doorControl", "windowShade", "garageDoorControl",
                 "thermostat", "mediaPlayback", "audioVolume",
                 "dryerOperatingState", "washerOperatingState", "ovenOperatingState"
             }
             if not excluded_caps.intersection(capabilities):
+                _LOG.info(f"Light {device.label} -> LIGHT (has {light_indicators})")
                 return EntityType.LIGHT
         
         light_keywords = ["light", "lamp", "bulb", "led", "fixture", "sconce", "chandelier"]
         if "switch" in capabilities and any(word in device_name for word in light_keywords):
+            _LOG.info(f"Light {device.label} -> LIGHT (name contains light keyword)")
             return EntityType.LIGHT
         
         sensor_caps = {
@@ -91,7 +98,9 @@ class SmartThingsEntityFactory:
             "accelerationSensor", "threeAxis", "ultravioletIndex"
         }
         
-        if sensor_caps.intersection(capabilities):
+        sensor_matches = sensor_caps.intersection(capabilities)
+        if sensor_matches:
+            _LOG.info(f"Sensor {device.label} -> SENSOR (has {sensor_matches})")
             return EntityType.SENSOR
         
         if "switch" in capabilities:
@@ -103,8 +112,10 @@ class SmartThingsEntityFactory:
             }
             
             if not excluded_caps.intersection(capabilities):
+                _LOG.info(f"Switch {device.label} -> SWITCH (basic switch capability)")
                 return EntityType.SWITCH
         
+        _LOG.warning(f"Unknown {device.label} -> NO TYPE DETECTED (capabilities: {capabilities})")
         return None
 
     def create_entity(self, device_data: Dict[str, Any], config: Dict[str, Any], area: Optional[str] = None) -> Optional[Union[Light, Switch, Sensor, Cover, Button, MediaPlayer, Climate]]:
@@ -121,8 +132,6 @@ class SmartThingsEntityFactory:
             self.command_timestamps[device.id] = 0
             self.optimistic_states[entity_id] = {}
             self.last_real_updates[entity_id] = 0
-            self.pre_command_states[entity_id] = {}
-            self.expected_states[entity_id] = {}
 
             entity = None
             
@@ -214,15 +223,22 @@ class SmartThingsEntityFactory:
         if "colorTemperature" in device.capabilities:
             features.append(LightFeatures.COLOR_TEMPERATURE)
         
-        return Light(entity_id, name, features, {}, area=area, cmd_handler=self._handle_command)
+        return Light(
+            entity_id, name, features, {}, area=area, cmd_handler=self._handle_command
+        )
 
     def _create_switch(self, entity_id: str, name: str, device: SmartThingsDevice, area: Optional[str]) -> Switch:
-        return Switch(entity_id, name, [SwitchFeatures.ON_OFF, SwitchFeatures.TOGGLE], {}, area=area, cmd_handler=self._handle_command)
+        return Switch(
+            entity_id, name, [SwitchFeatures.ON_OFF, SwitchFeatures.TOGGLE], 
+            {}, area=area, cmd_handler=self._handle_command
+        )
 
     def _create_sensor(self, entity_id: str, name: str, device: SmartThingsDevice, area: Optional[str]) -> Sensor:
         device_class = SensorClasses.CUSTOM
         
-        if "temperatureMeasurement" in device.capabilities:
+        if "lock" in device.capabilities:
+            device_class = SensorClasses.CUSTOM
+        elif "temperatureMeasurement" in device.capabilities:
             device_class = SensorClasses.TEMPERATURE
         elif "battery" in device.capabilities:
             device_class = SensorClasses.BATTERY
@@ -232,6 +248,8 @@ class SmartThingsEntityFactory:
             device_class = SensorClasses.ENERGY
         elif "relativeHumidityMeasurement" in device.capabilities:
             device_class = SensorClasses.HUMIDITY
+        elif "voltageMeasurement" in device.capabilities:
+            device_class = SensorClasses.VOLTAGE
         
         return Sensor(entity_id, name, [], {}, device_class=device_class, area=area)
 
@@ -271,6 +289,7 @@ class SmartThingsEntityFactory:
             features.extend([MediaFeatures.PLAY_PAUSE, MediaFeatures.STOP])
         
         device_class = MediaClasses.SPEAKER
+        
         return MediaPlayer(entity_id, name, features, {}, device_class=device_class, area=area, cmd_handler=self._handle_command)
 
     def _create_climate(self, entity_id: str, name: str, device: SmartThingsDevice, area: Optional[str]) -> Climate:
@@ -319,8 +338,10 @@ class SmartThingsEntityFactory:
             
             if old_attributes != entity.attributes:
                 self.last_real_updates[entity.id] = time.time()
+                
                 if entity.id in self.optimistic_states:
                     self.optimistic_states[entity.id] = {}
+                
                 _LOG.info(f"Real state update: {entity.name} -> {entity.attributes}")
                 
         except Exception as e:
@@ -423,6 +444,7 @@ class SmartThingsEntityFactory:
         
         self.command_timestamps[device_id] = time.time()
         
+        # Notify driver of command for priority polling
         if self.command_callback:
             self.command_callback(entity.id)
         
@@ -433,21 +455,16 @@ class SmartThingsEntityFactory:
                 _LOG.warning(f"Unhandled command '{cmd_id}' for entity type '{entity_type}'")
                 return StatusCodes.NOT_IMPLEMENTED
             
-            # Store pre-command state for smart verification
-            self.pre_command_states[entity.id] = dict(entity.attributes)
-            
             success = self._apply_optimistic_update(entity, entity_type, cmd_id, capabilities)
             if not success:
                 return StatusCodes.BAD_REQUEST
-            
-            # Store expected state after optimistic update
-            self.expected_states[entity.id] = dict(entity.attributes)
             
             async with self.client:
                 command_success = await self.client.execute_command(device_id, capability, command, args)
             
             if command_success:
-                self._schedule_smart_verification(entity, device_id)
+                # ⚡ OPTIMIZED: Immediate state verification for user commands
+                self._schedule_immediate_state_verification(entity, device_id)
                 _LOG.info(f"Command succeeded with optimistic update: {entity.name}")
                 return StatusCodes.OK
             else:
@@ -516,76 +533,49 @@ class SmartThingsEntityFactory:
             entity.attributes.update(old_attributes)
             return False
 
-    def _schedule_smart_verification(self, entity, device_id: str):
-        async def smart_verify_state():
-            entity_id = entity.id
-            max_attempts = 3
-            delays = [1.0, 2.5, 5.0]
-            
+    def _schedule_immediate_state_verification(self, entity, device_id: str):
+        async def immediate_verify_state():
             try:
-                pre_command_state = self.pre_command_states.get(entity_id, {})
-                expected_state = self.expected_states.get(entity_id, {})
+                # ⚡ OPTIMIZED: Reduce delay from 1.5s to 0.3s
+                await asyncio.sleep(0.3)
                 
-                for attempt in range(max_attempts):
-                    await asyncio.sleep(delays[attempt])
+                async with self.client:
+                    device_status = await self.client.get_device_status(device_id)
                     
-                    async with self.client:
-                        device_status = await self.client.get_device_status(device_id)
-                        
-                    if device_status:
-                        # Test what the API state would be
-                        temp_attributes = dict(entity.attributes)
-                        self.update_entity_attributes(entity, device_status)
-                        api_state = dict(entity.attributes)
-                        entity.attributes.update(temp_attributes)
-                        
-                        # Check if API matches expected state
-                        if self._states_match(api_state, expected_state):
-                            entity.attributes.update(api_state)
-                            self.api.configured_entities.update_attributes(entity.id, entity.attributes)
-                            _LOG.info(f"Smart verification success: {entity.name}")
-                            break
-                            
-                        # Check if API matches pre-command (stale data)
-                        elif self._states_match(api_state, pre_command_state):
-                            if attempt == max_attempts - 1:
-                                _LOG.info(f"Keeping optimistic state: {entity.name} (API still stale)")
-                            continue
-                            
-                        else:
-                            # Different state - use API
-                            entity.attributes.update(api_state)
-                            self.api.configured_entities.update_attributes(entity.id, entity.attributes)
-                            _LOG.info(f"Smart verification corrected: {entity.name}")
-                            break
+                if device_status:
+                    old_attributes = dict(entity.attributes)
+                    self.update_entity_attributes(entity, device_status)
+                    
+                    if old_attributes != entity.attributes:
+                        self.api.configured_entities.update_attributes(entity.id, entity.attributes)
+                        _LOG.info(f"⚡ Fast verification complete: {entity.name} -> {entity.attributes}")
+                    else:
+                        # ⚡ OPTIMIZED: If no change after 0.3s, try once more after 1.2s
+                        await asyncio.sleep(1.2)  # Total delay now 1.5s
+                        device_status_retry = await self.client.get_device_status(device_id)
+                        if device_status_retry:
+                            self.update_entity_attributes(entity, device_status_retry)
+                            if old_attributes != entity.attributes:
+                                self.api.configured_entities.update_attributes(entity.id, entity.attributes)
+                                _LOG.info(f"⚡ Delayed verification complete: {entity.name} -> {entity.attributes}")
+                            else:
+                                _LOG.debug(f"Optimistic update confirmed correct: {entity.name}")
                         
             except Exception as e:
-                _LOG.warning(f"Smart verification failed for {entity.name}: {e}")
+                _LOG.warning(f"Fast state verification failed for {entity.name}: {e}")
             finally:
-                # Cleanup
-                if entity_id in self.state_sync_tasks:
-                    del self.state_sync_tasks[entity_id]
-                self.pre_command_states.pop(entity_id, None)
-                self.expected_states.pop(entity_id, None)
+                if entity.id in self.state_sync_tasks:
+                    del self.state_sync_tasks[entity.id]
         
         if entity.id in self.state_sync_tasks:
             self.state_sync_tasks[entity.id].cancel()
         
-        task = asyncio.create_task(smart_verify_state())
+        task = asyncio.create_task(immediate_verify_state())
         self.state_sync_tasks[entity.id] = task
-
-    def _states_match(self, state1: Dict[str, Any], state2: Dict[str, Any]) -> bool:
-        """Compare primary state attributes"""
-        key_attrs = {LightAttr.STATE, SwitchAttr.STATE, CoverAttr.STATE, MediaAttr.STATE, ClimateAttr.STATE}
-        
-        for attr in key_attrs:
-            if attr in state1 and attr in state2:
-                if state1[attr] != state2[attr]:
-                    return False
-        return True
 
     async def _revert_optimistic_update(self, entity, device_id: str):
         try:
+            _LOG.info(f"Reverting optimistic update for {entity.name}")
             async with self.client:
                 device_status = await self.client.get_device_status(device_id)
                 if device_status:
@@ -615,64 +605,64 @@ class SmartThingsEntityFactory:
             else:
                 if cmd_id == 'on':
                     capability, command = 'switch', 'on'
-elif cmd_id == 'off':
-                   capability, command = 'switch', 'off'
-               elif cmd_id == 'toggle':
-                   current_state = entity.attributes.get(SwitchAttr.STATE)
-                   if current_state == SwitchStates.ON:
-                       capability, command = 'switch', 'off'
-                   else:
-                       capability, command = 'switch', 'on'
-       
-       elif entity_type == EntityType.LIGHT:
-           if cmd_id == 'on':
-               capability, command = 'switch', 'on'
-           elif cmd_id == 'off':
-               capability, command = 'switch', 'off'
-           elif cmd_id == 'toggle':
-               current_state = entity.attributes.get(LightAttr.STATE)
-               if current_state == LightStates.ON:
-                   capability, command = 'switch', 'off'
-               else:
-                   capability, command = 'switch', 'on'
-       
-       elif entity_type == EntityType.COVER:
-           if cmd_id == 'open':
-               if "doorControl" in capabilities:
-                   capability, command = 'doorControl', 'open'
-               elif "windowShade" in capabilities:
-                   capability, command = 'windowShade', 'open'
-           elif cmd_id == 'close':
-               if "doorControl" in capabilities:
-                   capability, command = 'doorControl', 'close'
-               elif "windowShade" in capabilities:
-                   capability, command = 'windowShade', 'close'
-           elif cmd_id == 'stop':
-               if "doorControl" in capabilities:
-                   capability, command = 'doorControl', 'stop'
-               elif "windowShade" in capabilities:
-                   capability, command = 'windowShade', 'stop'
-       
-       elif entity_type == EntityType.MEDIA_PLAYER:
-           if cmd_id == 'on':
-               capability, command = 'switch', 'on'
-           elif cmd_id == 'off':
-               capability, command = 'switch', 'off'
-           elif cmd_id == 'toggle':
-               current_state = entity.attributes.get(MediaAttr.STATE)
-               if current_state == MediaStates.ON:
-                   capability, command = 'switch', 'off'
-               else:
-                   capability, command = 'switch', 'on'
-       
-       elif entity_type == EntityType.CLIMATE:
-           if cmd_id == 'on':
-               capability, command = 'thermostat', 'auto'
-           elif cmd_id == 'off':
-               capability, command = 'thermostat', 'off'
-       
-       elif entity_type == EntityType.BUTTON:
-           if cmd_id == 'push':
-               capability, command = 'momentary', 'push'
-       
-       return capability, command, args
+                elif cmd_id == 'off':
+                    capability, command = 'switch', 'off'
+                elif cmd_id == 'toggle':
+                    current_state = entity.attributes.get(SwitchAttr.STATE)
+                    if current_state == SwitchStates.ON:
+                        capability, command = 'switch', 'off'
+                    else:
+                        capability, command = 'switch', 'on'
+        
+        elif entity_type == EntityType.LIGHT:
+            if cmd_id == 'on':
+                capability, command = 'switch', 'on'
+            elif cmd_id == 'off':
+                capability, command = 'switch', 'off'
+            elif cmd_id == 'toggle':
+                current_state = entity.attributes.get(LightAttr.STATE)
+                if current_state == LightStates.ON:
+                    capability, command = 'switch', 'off'
+                else:
+                    capability, command = 'switch', 'on'
+        
+        elif entity_type == EntityType.COVER:
+            if cmd_id == 'open':
+                if "doorControl" in capabilities:
+                    capability, command = 'doorControl', 'open'
+                elif "windowShade" in capabilities:
+                    capability, command = 'windowShade', 'open'
+            elif cmd_id == 'close':
+                if "doorControl" in capabilities:
+                    capability, command = 'doorControl', 'close'
+                elif "windowShade" in capabilities:
+                    capability, command = 'windowShade', 'close'
+            elif cmd_id == 'stop':
+                if "doorControl" in capabilities:
+                    capability, command = 'doorControl', 'stop'
+                elif "windowShade" in capabilities:
+                    capability, command = 'windowShade', 'stop'
+        
+        elif entity_type == EntityType.MEDIA_PLAYER:
+            if cmd_id == 'on':
+                capability, command = 'switch', 'on'
+            elif cmd_id == 'off':
+                capability, command = 'switch', 'off'
+            elif cmd_id == 'toggle':
+                current_state = entity.attributes.get(MediaAttr.STATE)
+                if current_state == MediaStates.ON:
+                    capability, command = 'switch', 'off'
+                else:
+                    capability, command = 'switch', 'on'
+        
+        elif entity_type == EntityType.CLIMATE:
+            if cmd_id == 'on':
+                capability, command = 'thermostat', 'auto'
+            elif cmd_id == 'off':
+                capability, command = 'thermostat', 'off'
+        
+        elif entity_type == EntityType.BUTTON:
+            if cmd_id == 'push':
+                capability, command = 'momentary', 'push'
+        
+        return capability, command, args

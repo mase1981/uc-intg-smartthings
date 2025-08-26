@@ -38,11 +38,9 @@ class SmartThingsEntityFactory:
     def __init__(self, client: SmartThingsClient, api: IntegrationAPI):
         self.client = client
         self.api = api
-        self.command_timestamps = {}
-        self.pending_verifications = {}
-        self.optimistic_states = {}
-        self.last_real_updates = {}
-        self.state_sync_tasks = {}
+        self.command_in_progress = {}  # Track active commands per device
+        self.command_queue = {}  # Queue commands per device to prevent flooding
+        self.last_command_time = {}  # Track last command time per device
         self.command_callback = None
 
     def determine_entity_type(self, device: SmartThingsDevice) -> Optional[str]:
@@ -129,9 +127,10 @@ class SmartThingsEntityFactory:
             entity_id = f"st_{device.id}"
             label = device.label or device.name or "Unknown Device"
             
-            self.command_timestamps[device.id] = 0
-            self.optimistic_states[entity_id] = {}
-            self.last_real_updates[entity_id] = 0
+            # Initialize command tracking for this device
+            self.command_in_progress[device.id] = False
+            self.command_queue[device.id] = []
+            self.last_command_time[device.id] = 0
 
             entity = None
             
@@ -337,11 +336,6 @@ class SmartThingsEntityFactory:
                 self._update_climate_attributes(entity, main_component)
             
             if old_attributes != entity.attributes:
-                self.last_real_updates[entity.id] = time.time()
-                
-                if entity.id in self.optimistic_states:
-                    self.optimistic_states[entity.id] = {}
-                
                 _LOG.info(f"Real state update: {entity.name} -> {entity.attributes}")
                 
         except Exception as e:
@@ -437,155 +431,100 @@ class SmartThingsEntityFactory:
         entity_type = getattr(entity, 'entity_type', None)
         capabilities = getattr(entity, 'smartthings_capabilities', set())
         
-        _LOG.info(f"Command: {entity.name} -> {cmd_id} {params}")
+        _LOG.info(f"Command received: {entity.name} -> {cmd_id} {params}")
         
         if not self.client:
+            _LOG.error(f"No client available for command: {entity.name}")
             return StatusCodes.SERVICE_UNAVAILABLE
         
-        self.command_timestamps[device_id] = time.time()
+        # Check if command is already in progress for this device
+        if self.command_in_progress.get(device_id, False):
+            _LOG.warning(f"Command already in progress for {entity.name}, ignoring new command")
+            return StatusCodes.CONFLICT
         
-        # Notify driver of command for priority polling
-        if self.command_callback:
-            self.command_callback(entity.id)
+        # Rate limiting: prevent commands too close together
+        now = time.time()
+        last_cmd_time = self.last_command_time.get(device_id, 0)
+        if now - last_cmd_time < 0.5:  # Minimum 500ms between commands
+            _LOG.warning(f"Commands too frequent for {entity.name}, ignoring")
+            return StatusCodes.CONFLICT
+        
+        self.last_command_time[device_id] = now
         
         try:
+            # Mark command in progress
+            self.command_in_progress[device_id] = True
+            
+            # Notify driver to pause polling for this device
+            if self.command_callback:
+                self.command_callback(entity.id)
+            
             capability, command, args = self._map_command(entity_type, cmd_id, params, entity, capabilities)
             
             if not capability or not command:
                 _LOG.warning(f"Unhandled command '{cmd_id}' for entity type '{entity_type}'")
                 return StatusCodes.NOT_IMPLEMENTED
             
-            success = self._apply_optimistic_update(entity, entity_type, cmd_id, capabilities)
-            if not success:
-                return StatusCodes.BAD_REQUEST
-            
+            # Execute command synchronously
             async with self.client:
                 command_success = await self.client.execute_command(device_id, capability, command, args)
             
-            if command_success:
-                # ⚡ OPTIMIZED: Immediate state verification for user commands
-                self._schedule_immediate_state_verification(entity, device_id)
-                _LOG.info(f"Command succeeded with optimistic update: {entity.name}")
-                return StatusCodes.OK
-            else:
-                _LOG.warning(f"Command failed, reverting optimistic update: {entity.name}")
-                await self._revert_optimistic_update(entity, device_id)
+            if not command_success:
+                _LOG.error(f"Command failed for {entity.name}: {cmd_id}")
                 return StatusCodes.SERVER_ERROR
+            
+            # Wait for device to process command, then verify state
+            await self._verify_command_result(entity, device_id, cmd_id)
+            
+            _LOG.info(f"Command completed successfully: {entity.name} -> {cmd_id}")
+            return StatusCodes.OK
                 
         except Exception as e:
             _LOG.error(f"Command failed for {entity.name}: {e}")
-            await self._revert_optimistic_update(entity, device_id)
             return StatusCodes.SERVER_ERROR
+        finally:
+            # Always clear the in-progress flag
+            self.command_in_progress[device_id] = False
 
-    def _apply_optimistic_update(self, entity, entity_type: str, cmd_id: str, capabilities: set) -> bool:
-        old_attributes = dict(entity.attributes)
-        
+    async def _verify_command_result(self, entity, device_id: str, cmd_id: str):
+        """Verify command result with smart timing"""
         try:
-            self.optimistic_states[entity.id] = dict(old_attributes)
+            # Fast check after 400ms
+            await asyncio.sleep(0.4)
             
-            if entity_type == EntityType.SWITCH:
-                if "lock" in capabilities:
-                    if cmd_id in ['on', 'toggle']:
-                        current_state = entity.attributes.get(SwitchAttr.STATE)
-                        if cmd_id == 'toggle':
-                            new_state = SwitchStates.OFF if current_state == SwitchStates.ON else SwitchStates.ON
-                        else:
-                            new_state = SwitchStates.ON
-                        entity.attributes[SwitchAttr.STATE] = new_state
-                    elif cmd_id == 'off':
-                        entity.attributes[SwitchAttr.STATE] = SwitchStates.OFF
-                else:
-                    if cmd_id == 'on':
-                        entity.attributes[SwitchAttr.STATE] = SwitchStates.ON
-                    elif cmd_id == 'off':
-                        entity.attributes[SwitchAttr.STATE] = SwitchStates.OFF
-                    elif cmd_id == 'toggle':
-                        current_state = entity.attributes.get(SwitchAttr.STATE)
-                        entity.attributes[SwitchAttr.STATE] = SwitchStates.OFF if current_state == SwitchStates.ON else SwitchStates.ON
-            
-            elif entity_type == EntityType.LIGHT:
-                if cmd_id == 'on':
-                    entity.attributes[LightAttr.STATE] = LightStates.ON
-                elif cmd_id == 'off':
-                    entity.attributes[LightAttr.STATE] = LightStates.OFF
-                elif cmd_id == 'toggle':
-                    current_state = entity.attributes.get(LightAttr.STATE)
-                    entity.attributes[LightAttr.STATE] = LightStates.OFF if current_state == LightStates.ON else LightStates.ON
-            
-            elif entity_type == EntityType.COVER:
-                if cmd_id == 'open':
-                    entity.attributes[CoverAttr.STATE] = CoverStates.OPENING
-                elif cmd_id == 'close':
-                    entity.attributes[CoverAttr.STATE] = CoverStates.CLOSING
-            
-            if old_attributes != entity.attributes:
-                if entity.id in self.state_sync_tasks:
-                    self.state_sync_tasks[entity.id].cancel()
-                
-                self.api.configured_entities.update_attributes(entity.id, entity.attributes)
-                _LOG.info(f"Optimistic update applied: {entity.name} -> {entity.attributes}")
-                return True
-            
-            return True
-            
-        except Exception as e:
-            _LOG.error(f"Error applying optimistic update: {e}")
-            entity.attributes.update(old_attributes)
-            return False
-
-    def _schedule_immediate_state_verification(self, entity, device_id: str):
-        async def immediate_verify_state():
-            try:
-                # ⚡ OPTIMIZED: Reduce delay from 1.5s to 0.3s
-                await asyncio.sleep(0.3)
-                
-                async with self.client:
-                    device_status = await self.client.get_device_status(device_id)
-                    
-                if device_status:
-                    old_attributes = dict(entity.attributes)
-                    self.update_entity_attributes(entity, device_status)
-                    
-                    if old_attributes != entity.attributes:
-                        self.api.configured_entities.update_attributes(entity.id, entity.attributes)
-                        _LOG.info(f"⚡ Fast verification complete: {entity.name} -> {entity.attributes}")
-                    else:
-                        # ⚡ OPTIMIZED: If no change after 0.3s, try once more after 1.2s
-                        await asyncio.sleep(1.2)  # Total delay now 1.5s
-                        device_status_retry = await self.client.get_device_status(device_id)
-                        if device_status_retry:
-                            self.update_entity_attributes(entity, device_status_retry)
-                            if old_attributes != entity.attributes:
-                                self.api.configured_entities.update_attributes(entity.id, entity.attributes)
-                                _LOG.info(f"⚡ Delayed verification complete: {entity.name} -> {entity.attributes}")
-                            else:
-                                _LOG.debug(f"Optimistic update confirmed correct: {entity.name}")
-                        
-            except Exception as e:
-                _LOG.warning(f"Fast state verification failed for {entity.name}: {e}")
-            finally:
-                if entity.id in self.state_sync_tasks:
-                    del self.state_sync_tasks[entity.id]
-        
-        if entity.id in self.state_sync_tasks:
-            self.state_sync_tasks[entity.id].cancel()
-        
-        task = asyncio.create_task(immediate_verify_state())
-        self.state_sync_tasks[entity.id] = task
-
-    async def _revert_optimistic_update(self, entity, device_id: str):
-        try:
-            _LOG.info(f"Reverting optimistic update for {entity.name}")
             async with self.client:
                 device_status = await self.client.get_device_status(device_id)
-                if device_status:
-                    old_attributes = dict(entity.attributes)
-                    self.update_entity_attributes(entity, device_status)
-                    if old_attributes != entity.attributes:
-                        self.api.configured_entities.update_attributes(entity.id, entity.attributes)
-                        _LOG.info(f"Optimistic update reverted: {entity.name}")
+                
+            if device_status:
+                old_attributes = dict(entity.attributes)
+                self.update_entity_attributes(entity, device_status)
+                
+                if old_attributes != entity.attributes:
+                    # State changed, update UI immediately
+                    self.api.configured_entities.update_attributes(entity.id, entity.attributes)
+                    _LOG.info(f"Fast verification success: {entity.name} -> {entity.attributes}")
+                    return
+            
+            # If no change yet, wait a bit more and try again
+            await asyncio.sleep(0.8)  # Total delay now 1.2s
+            
+            async with self.client:
+                device_status = await self.client.get_device_status(device_id)
+                
+            if device_status:
+                old_attributes = dict(entity.attributes)
+                self.update_entity_attributes(entity, device_status)
+                
+                if old_attributes != entity.attributes:
+                    self.api.configured_entities.update_attributes(entity.id, entity.attributes)
+                    _LOG.info(f"Delayed verification success: {entity.name} -> {entity.attributes}")
+                else:
+                    _LOG.warning(f"No state change detected for {entity.name} after command {cmd_id}")
+            else:
+                _LOG.warning(f"No device status returned for {entity.name}")
+                        
         except Exception as e:
-            _LOG.error(f"Error reverting optimistic update: {e}")
+            _LOG.error(f"Command verification failed for {entity.name}: {e}")
 
     def _map_command(self, entity_type: str, cmd_id: str, params: Dict[str, Any], entity, capabilities: set) -> tuple:
         capability = command = args = None

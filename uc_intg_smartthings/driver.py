@@ -120,18 +120,47 @@ class SmartThingsIntegration:
             
             for device_data in devices_raw:
                 try:
+                    # Enhanced logging for debugging device detection issues
+                    device_name = device_data.get("label") or device_data.get("name", "Unknown")
+                    device_type = device_data.get("deviceTypeName", "")
+                    capabilities = set()
+                    
+                    # Extract capabilities for logging
+                    for component in device_data.get("components", []):
+                        for cap in component.get("capabilities", []):
+                            cap_id = cap.get("id", "")
+                            if cap_id:
+                                capabilities.add(cap_id)
+                    
+                    _LOG.info(f"Processing device: {device_name}")
+                    _LOG.info(f"  - Device Type: {device_type}")
+                    _LOG.info(f"  - Capabilities ({len(capabilities)}): {list(capabilities)}")
+                    
                     entity = self.factory.create_entity(device_data, self.config, room_names.get(device_data.get("roomId")))
                     if entity:
                         if self.api.available_entities.add(entity):
                             created_count += 1
-                            _LOG.debug(f"Added entity: {entity.id} ({entity.name})")
+                            _LOG.info(f"✅ Successfully added entity: {entity.id} ({entity.name})")
                         else:
-                            _LOG.warning(f"Failed to add entity: {entity.id}")
+                            _LOG.warning(f"❌ Failed to add entity to UC API: {entity.id}")
+                    else:
+                        _LOG.warning(f"⚠️ No entity created for device: {device_name}")
+                        _LOG.warning(f"    This device may not be supported yet or lacks required capabilities")
+                        
                 except Exception as e:
                     device_name = device_data.get("label", device_data.get("name", "Unknown"))
-                    _LOG.error(f"Error creating entity for device {device_name}: {e}")
+                    _LOG.error(f"Error creating entity for device {device_name}: {e}", exc_info=True)
 
-            _LOG.info(f"Created {created_count} entities from {len(devices_raw)} devices")
+            _LOG.info(f"Entity creation summary: {created_count} entities created from {len(devices_raw)} devices")
+            
+            if created_count == 0:
+                _LOG.error("❌ No entities were created! This indicates:")
+                _LOG.error("   - Devices may not be supported yet")
+                _LOG.error("   - Device capabilities don't match known patterns")
+                _LOG.error("   - Configuration may exclude all device types")
+                _LOG.error("   Please run the device analyzer script to get device details")
+            else:
+                _LOG.info(f"✅ Successfully created {created_count} entities")
 
         except Exception as e:
             _LOG.error(f"Failed to create entities: {e}", exc_info=True)
@@ -331,6 +360,7 @@ class SmartThingsIntegration:
 
     def _calculate_polling_interval(self) -> float:
         """Calculate dynamic polling interval based on rate limits and activity"""
+        import time
         
         # Much slower polling to avoid rate limits
         if self.devices_in_command:

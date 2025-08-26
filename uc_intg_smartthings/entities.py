@@ -16,7 +16,7 @@ from ucapi.sensor import Sensor, Attributes as SensorAttr, States as SensorState
 from ucapi.cover import Cover, Features as CoverFeatures, Attributes as CoverAttr, States as CoverStates, DeviceClasses as CoverClasses
 from ucapi.button import Button, Attributes as ButtonAttr, States as ButtonStates
 from ucapi.media_player import MediaPlayer, Features as MediaFeatures, Attributes as MediaAttr, States as MediaStates, DeviceClasses as MediaClasses
-from ucapi.climate import Climate, Features as ClimateFeatures,Attributes as ClimateAttr, States as ClimateStates
+from ucapi.climate import Climate, Features as ClimateFeatures, Attributes as ClimateAttr, States as ClimateStates
 from ucapi.api_definitions import StatusCodes
 
 from uc_intg_smartthings.client import SmartThingsDevice, SmartThingsClient

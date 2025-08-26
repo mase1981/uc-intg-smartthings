@@ -205,7 +205,7 @@ class ValidatedEntityMapper:
         if "temperatureMeasurement" in capabilities:
             device_class = SensorDeviceClasses.TEMPERATURE
             attributes[SensorAttributes.VALUE] = 0
-            attributes[SensorAttributes.UNIT] = "°C"
+            attributes[SensorAttributes.UNIT] = "Â°C"
         elif "relativeHumidityMeasurement" in capabilities:
             device_class = SensorDeviceClasses.HUMIDITY
             attributes[SensorAttributes.VALUE] = 0
@@ -293,7 +293,7 @@ class ValidatedEntityMapper:
             attributes[ClimateAttributes.FAN_MODE] = "auto"
         
         options = {
-            "temperature_unit": "°C",
+            "temperature_unit": "Â°C",
             "target_temperature_step": 1,
             "min_temperature": 10,
             "max_temperature": 35
@@ -404,7 +404,7 @@ class ValidatedEntityMapper:
             new_state = LightStates.ON if switch_value == "on" else LightStates.OFF
             old_state = entity.attributes.get(LightAttributes.STATE)
             entity.attributes[LightAttributes.STATE] = new_state
-            _LOG.info("✅ Light %s state: %s -> %s", entity.name, old_state, new_state)
+            _LOG.info("âœ… Light %s state: %s -> %s", entity.name, old_state, new_state)
         
         level_value = cls._safe_get_value(status, "switchLevel", "level", "value")
         if level_value is not None:
@@ -439,7 +439,7 @@ class ValidatedEntityMapper:
             new_state = SwitchStates.ON if switch_value == "on" else SwitchStates.OFF
             old_state = entity.attributes.get(SwitchAttributes.STATE)
             entity.attributes[SwitchAttributes.STATE] = new_state
-            _LOG.info("✅ Switch %s state: %s -> %s", entity.name, old_state, new_state)
+            _LOG.info("âœ… Switch %s state: %s -> %s", entity.name, old_state, new_state)
     
     @classmethod
     def _update_sensor_attributes_validated(cls, entity: Sensor, status: Dict[str, Any]) -> None:
@@ -547,7 +547,7 @@ class ValidatedEntityMapper:
                 entity.attributes[CoverAttributes.STATE] = CoverStates.OPENING
             elif door_value == "closing":
                 entity.attributes[CoverAttributes.STATE] = CoverStates.CLOSING
-            _LOG.info("✅ Cover %s door state: %s", entity.name, door_value)
+            _LOG.info("âœ… Cover %s door state: %s", entity.name, door_value)
             return
         
         shade_value = cls._safe_get_value(status, "windowShade", "windowShade", "value")

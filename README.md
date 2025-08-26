@@ -10,8 +10,11 @@ Control your SmartThings devices seamlessly with your Unfolded Circle Remote 2 o
 
 ## Features
 
-This integration provides comprehensive control of your SmartThings ecosystem directly from your Unfolded Circle Remote, supporting a wide range of device types with **optimistic updates** for instant responsiveness and **smart polling** for real-time state synchronization.
+This integration provides comprehensive control of your SmartThings ecosystem directly from your Unfolded Circle Remote, supporting a wide range of device types
 
+## Important
+
+Due to the way Smartthings work, to make this integration free/Open Source without the mandatory requirement for a public facing SmartApp (webhooks) i had to use a Pull Method, the downside is that there will be a delay between state change and what the remote will reflect on the screen - This is a trade off to get this integration to work. At some point in the future when UC Team make Smartthings integration baked into the remote firmware, they will most likely to host and maintain their own SmartApp (webhooks) with WWST (Work With Smartthings) Certification. 
 ### 🏠 Supported Device Types
 
 The integration automatically detects and categorizes your configured SmartThings devices
@@ -58,12 +61,6 @@ The integration automatically detects and categorizes your configured SmartThing
 
 ### 🚀 **Advanced Features**
 
-#### **Optimistic Updates**
-- **Instant Response**: UI updates immediately when you press a button
-- **Background Verification**: Real device status confirmed in the background
-- **Smart Fallback**: Automatically reverts if command fails
-- **Seamless Experience**: No waiting for cloud response
-
 #### **Smart Polling System**
 - **Adaptive Intervals**: Faster polling for recently changed devices
 - **Activity-Based**: High activity = 3sec intervals, Low activity = 20sec intervals  
@@ -90,12 +87,6 @@ UC Remote ←→ Integration ←→ SmartThings Cloud API ←→ SmartThings Hub
 - Ensures reliability across different network configurations
 - No need for port forwarding or external network access
 - Works with any internet connection (including cellular, VPN, etc.)
-
-### **Smart Performance Optimization**
-1. **Optimistic Updates**: Instant UI response + background verification
-2. **Smart Caching**: Reduces API calls with intelligent cache management  
-3. **Adaptive Polling**: Faster updates for active devices, slower for idle devices
-4. **Batch Operations**: Multiple device status checks in single API calls
 
 ## Prerequisites
 
@@ -209,10 +200,24 @@ When you press a button on your remote:
 ## Performance & Optimization
 
 ### **API Usage Optimization**
-- **Smart Caching**: 15-second cache for device status
-- **Batch Requests**: Up to 6 devices per API call
-- **Rate Limiting**: Automatic throttling to respect API limits
-- **Connection Pooling**: Efficient HTTP connection management
+- Smart Rate Limiting in Client:
+
+- Tracks request times and prevents exceeding 8 requests per 10 seconds
+Automatically waits when approaching limits
+No retries to avoid stacking requests
+
+
+- Single Verification Strategy:
+- Only 1 verification attempt after 2 seconds (vs 2 attempts before)
+Skips verification if recently rate limited
+Lets background polling catch up instead
+- Minimum 15-30 seconds between polls (vs 3-5 seconds before)
+Pauses completely during commands
+Extends pause after rate limits
+
+- Gracefully handles 429 errors
+Marks rate limit timestamps to inform future decisions
+Falls back to polling for state updates
 
 ### **Network Requirements**
 - **Bandwidth**: Minimal (~1KB per device per minute)

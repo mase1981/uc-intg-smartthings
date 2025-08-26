@@ -149,60 +149,76 @@ class SmartThingsClient:
         
         self._device_cache: Dict[str, Dict[str, Any]] = {}
         self._cache_timestamps: Dict[str, float] = {}
-        self._cache_ttl = 15.0
+        self._cache_ttl = 30.0  # Longer cache for rate limit compliance
         
-        self._connection_pool_limit = 10
-        self._request_timeout = 12
-        self._max_retries = 2
-        self._retry_delays = [0.5, 1.0]
+        self._connection_pool_limit = 4  # Much smaller pool
+        self._request_timeout = 8
+        self._max_retries = 0  # No retries to avoid rate limit stacking
         
         self._request_count = 0
         self._cache_hits = 0
         self._connection_errors = 0
+        self._session_creation_lock = asyncio.Lock()
+        
+        # Rate limiting
+        self._request_times = []  # Track request timestamps
+        self._rate_limit_window = 10  # 10 second window
+        self._max_requests_per_window = 8  # Conservative limit (SmartThings allows 10)
+        self._last_rate_limit = 0  # Track when we last hit 429
 
     def _create_ssl_context(self) -> ssl.SSLContext:
         """Create SSL context with proper certificate verification for UC Remote."""
         try:
-            # Create SSL context with certifi certificates
             ssl_context = ssl.create_default_context(cafile=certifi.where())
             ssl_context.check_hostname = True
             ssl_context.verify_mode = ssl.CERT_REQUIRED
             return ssl_context
         except Exception as e:
             _LOG.warning(f"Failed to create SSL context with certifi: {e}")
-            # Fallback to default context
             return ssl.create_default_context()
 
     async def __aenter__(self):
         if not self._session or self._session.closed:
-            # Create SSL context for proper certificate verification
-            ssl_context = self._create_ssl_context()
-            
-            connector = aiohttp.TCPConnector(
-                limit=self._connection_pool_limit,
-                limit_per_host=5,
-                ttl_dns_cache=300,
-                use_dns_cache=True,
-                keepalive_timeout=30,
-                enable_cleanup_closed=True,
-                ssl=ssl_context  # Use proper SSL context
-            )
-            
-            timeout = aiohttp.ClientTimeout(
-                total=self._request_timeout,
-                connect=5,
-                sock_read=8
-            )
-            
-            self._session = aiohttp.ClientSession(
-                connector=connector,
-                timeout=timeout,
-                headers={"User-Agent": "UC-SmartThings-Integration/1.0"}
-            )
+            async with self._session_creation_lock:
+                # Double-check after acquiring lock
+                if not self._session or self._session.closed:
+                    await self._create_session()
         return self
 
+    async def _create_session(self):
+        """Create a new aiohttp session with optimized settings"""
+        if self._session and not self._session.closed:
+            await self._session.close()
+            
+        ssl_context = self._create_ssl_context()
+        
+        connector = aiohttp.TCPConnector(
+            limit=self._connection_pool_limit,
+            limit_per_host=3,  # Reduced per-host limit
+            ttl_dns_cache=600,  # Longer DNS cache
+            use_dns_cache=True,
+            keepalive_timeout=45,  # Longer keepalive
+            enable_cleanup_closed=True,
+            ssl=ssl_context
+        )
+        
+        timeout = aiohttp.ClientTimeout(
+            total=self._request_timeout,
+            connect=4,  # Quick connection timeout
+            sock_read=6
+        )
+        
+        self._session = aiohttp.ClientSession(
+            connector=connector,
+            timeout=timeout,
+            headers={"User-Agent": "UC-SmartThings-Integration/1.1"}
+        )
+        
+        _LOG.debug("Created new aiohttp session")
+
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        await self.close()
+        # Don't automatically close session - keep it alive for reuse
+        pass
 
     async def close(self):
         if self._session and not self._session.closed:
@@ -211,9 +227,31 @@ class SmartThingsClient:
             self._session = None
             _LOG.debug("SmartThings API session closed")
 
+    async def _check_rate_limit(self):
+        """Check if we're within rate limits, wait if necessary"""
+        now = time.time()
+        
+        # Remove old requests outside the window
+        self._request_times = [t for t in self._request_times if now - t <= self._rate_limit_window]
+        
+        if len(self._request_times) >= self._max_requests_per_window:
+            # Calculate how long to wait
+            oldest_request = min(self._request_times)
+            wait_time = self._rate_limit_window - (now - oldest_request) + 0.1
+            
+            if wait_time > 0:
+                _LOG.info(f"Rate limit approaching, waiting {wait_time:.1f}s")
+                await asyncio.sleep(wait_time)
+        
+        # Record this request
+        self._request_times.append(now)
+
     async def _make_request(self, method: str, endpoint: str, **kwargs) -> Dict[str, Any]:
         if not self._token:
             raise SmartThingsAPIError("No access token provided")
+        
+        # Check rate limits before making request
+        await self._check_rate_limit()
         
         if not self._session or self._session.closed:
             await self.__aenter__()
@@ -224,52 +262,33 @@ class SmartThingsClient:
         url = f"{self.base_url}/{endpoint.lstrip('/')}"
         
         self._request_count += 1
-        _LOG.debug(f"ST API Request #{self._request_count}: {method} {endpoint}")
         
-        for attempt in range(self._max_retries + 1):
-            try:
-                async with self._session.request(method, url, headers=headers, **kwargs) as response:
-                    if response.status >= 400:
-                        error_text = await response.text()
-                        _LOG.error(f"SmartThings API Error {response.status}: {error_text}")
-                        
-                        if response.status == 401:
-                            raise SmartThingsAPIError(
-                                f"API request failed with status {response.status}", 
-                                response.status
-                            )
-                        
-                        if response.status >= 500 and attempt < self._max_retries:
-                            await asyncio.sleep(self._retry_delays[min(attempt, len(self._retry_delays) - 1)])
-                            continue
-                            
-                        raise SmartThingsAPIError(
-                            f"API request failed with status {response.status}", 
-                            response.status
-                        )
-                    
-                    result = await response.json() if response.content_type == 'application/json' else {}
-                    _LOG.debug(f"ST API Response #{self._request_count}: {response.status}")
-                    return result
-                    
-            except aiohttp.ClientError as e:
-                self._connection_errors += 1
-                _LOG.warning(f"SmartThings HTTP Client Error (attempt {attempt + 1}): {e}")
+        try:
+            async with self._session.request(method, url, headers=headers, **kwargs) as response:
+                if response.status == 429:
+                    self._last_rate_limit = time.time()
+                    error_text = await response.text()
+                    _LOG.warning(f"Hit SmartThings rate limit: {error_text}")
+                    raise SmartThingsAPIError(f"Rate limit exceeded", 429)
                 
-                if attempt < self._max_retries:
-                    await asyncio.sleep(self._retry_delays[min(attempt, len(self._retry_delays) - 1)])
-                    if self._session and not self._session.closed:
-                        await self._session.close()
-                    await self.__aenter__()
-                    continue
+                if response.status >= 400:
+                    error_text = await response.text()
+                    _LOG.error(f"SmartThings API Error {response.status}: {error_text}")
+                    raise SmartThingsAPIError(
+                        f"API request failed with status {response.status}", 
+                        response.status
+                    )
                 
-                raise SmartThingsAPIError(f"Connection error after {self._max_retries + 1} attempts: {e}")
-            except asyncio.TimeoutError:
-                _LOG.warning(f"SmartThings API Timeout (attempt {attempt + 1})")
-                if attempt < self._max_retries:
-                    await asyncio.sleep(self._retry_delays[min(attempt, len(self._retry_delays) - 1)])
-                    continue
-                raise SmartThingsAPIError(f"Request timeout after {self._max_retries + 1} attempts")
+                result = await response.json() if response.content_type == 'application/json' else {}
+                return result
+                
+        except aiohttp.ClientError as e:
+            self._connection_errors += 1
+            _LOG.warning(f"SmartThings HTTP Client Error: {e}")
+            raise SmartThingsAPIError(f"Connection error: {e}")
+        except asyncio.TimeoutError:
+            _LOG.warning(f"SmartThings API Timeout")
+            raise SmartThingsAPIError(f"Request timeout")
 
     async def get_locations(self) -> List[Dict[str, Any]]:
         """Get user's SmartThings locations."""
@@ -307,10 +326,10 @@ class SmartThingsClient:
         cache_key = f"status_{device_id}"
         now = time.time()
         
+        # Check cache first
         if (cache_key in self._device_cache and 
             now - self._cache_timestamps.get(cache_key, 0) < self._cache_ttl):
             self._cache_hits += 1
-            _LOG.debug(f"Cache hit for {device_id}")
             return self._device_cache[cache_key]
         
         try:
@@ -319,7 +338,6 @@ class SmartThingsClient:
             if response:
                 self._device_cache[cache_key] = response
                 self._cache_timestamps[cache_key] = now
-                _LOG.debug(f"Cached status for {device_id}")
                 return response
             
         except Exception as e:
@@ -340,6 +358,7 @@ class SmartThingsClient:
         try:
             await self._make_request("POST", f"/devices/{device_id}/commands", json=payload)
             
+            # Immediately invalidate cache for this device to force fresh status
             cache_key = f"status_{device_id}"
             if cache_key in self._device_cache:
                 del self._device_cache[cache_key]
@@ -377,7 +396,8 @@ class SmartThingsClient:
     async def batch_get_device_status(self, device_ids: List[str]) -> Dict[str, Optional[Dict[str, Any]]]:
         results = {}
         
-        batch_size = 6
+        # Smaller batch size for better reliability
+        batch_size = 4
         for i in range(0, len(device_ids), batch_size):
             batch = device_ids[i:i + batch_size]
             
@@ -392,7 +412,7 @@ class SmartThingsClient:
                     results[device_id] = result
             
             if i + batch_size < len(device_ids):
-                await asyncio.sleep(0.05)
+                await asyncio.sleep(0.1)  # Shorter delay between batches
         
         return results
 

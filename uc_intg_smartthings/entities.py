@@ -1,5 +1,4 @@
 """
-
 :copyright: (c) 2025 by Meir Miyara
 :license: MPL-2.0, see LICENSE for more details.
 """
@@ -355,6 +354,9 @@ class SmartThingsEntityFactory:
             features.extend([MediaFeatures.VOLUME, MediaFeatures.VOLUME_UP_DOWN, MediaFeatures.MUTE_TOGGLE])
         if "mediaPlayback" in device.capabilities:
             features.extend([MediaFeatures.PLAY_PAUSE, MediaFeatures.STOP])
+        # Add source selection feature for devices with input source capability
+        if "mediaInputSource" in device.capabilities or "samsungvd.mediaInputSource" in device.capabilities:
+            features.append(MediaFeatures.SELECT_SOURCE)
         
         # Enhanced device class detection for Samsung devices
         device_class = MediaClasses.SPEAKER

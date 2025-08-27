@@ -1,5 +1,4 @@
 """
-SmartThings Entity Factory for UC Remote - Enhanced Device Detection
 
 :copyright: (c) 2025 by Meir Miyara
 :license: MPL-2.0, see LICENSE for more details.
@@ -680,6 +679,26 @@ class SmartThingsEntityFactory:
                     capability, command = 'switch', 'off'
                 else:
                     capability, command = 'switch', 'on'
+            # Add volume control commands
+            elif cmd_id == 'volume_up':
+                if "audioVolume" in capabilities:
+                    capability, command = 'audioVolume', 'volumeUp'
+            elif cmd_id == 'volume_down':
+                if "audioVolume" in capabilities:
+                    capability, command = 'audioVolume', 'volumeDown'
+            elif cmd_id == 'mute_toggle':
+                if "audioMute" in capabilities:
+                    capability, command = 'audioMute', 'mute'
+                elif "audioVolume" in capabilities:
+                    capability, command = 'audioVolume', 'mute'
+            # Add input source selection
+            elif cmd_id == 'select_source':
+                if "mediaInputSource" in capabilities and params.get('source'):
+                    capability, command = 'mediaInputSource', 'setInputSource'
+                    args = [params.get('source')]
+                elif "samsungvd.mediaInputSource" in capabilities and params.get('source'):
+                    capability, command = 'samsungvd.mediaInputSource', 'setInputSource'
+                    args = [params.get('source')]
         
         elif entity_type == EntityType.CLIMATE:
             if cmd_id == 'on':

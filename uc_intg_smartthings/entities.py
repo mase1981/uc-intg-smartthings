@@ -369,8 +369,26 @@ class SmartThingsEntityFactory:
             device_class = MediaClasses.SPEAKER
         elif any(word in device_name for word in ["receiver", "amplifier"]):
             device_class = MediaClasses.RECEIVER
+
+        # Initialize attributes with default values
+        initial_attributes = {MediaAttr.STATE: MediaStates.UNKNOWN}
         
-        return MediaPlayer(entity_id, name, features, {}, device_class=device_class, area=area, cmd_handler=self._handle_command)
+        # Set available input sources for devices with input capabilities
+        if ("mediaInputSource" in device.capabilities or "samsungvd.mediaInputSource" in device.capabilities):
+            if "samsung" in device_name.lower() and "soundbar" in device_name.lower():
+                # Samsung soundbar input sources based on API error message
+                initial_attributes[MediaAttr.SOURCE_LIST] = [
+                    "AM", "CD", "FM", "HDMI", "HDMI1", "HDMI2", "HDMI3", "HDMI4", "HDMI5", "HDMI6", 
+                    "digitalTv", "USB", "YouTube", "aux", "bluetooth", "digital", "melon", "wifi", 
+                    "network", "optical", "coaxial", "analog1", "analog2", "analog3", "phono"
+                ]
+            else:
+                # Generic input sources for other devices
+                initial_attributes[MediaAttr.SOURCE_LIST] = [
+                    "HDMI1", "HDMI2", "HDMI3", "HDMI4", "USB", "aux", "bluetooth", "optical"
+                ]
+        
+        return MediaPlayer(entity_id, name, features, initial_attributes, device_class=device_class, area=area, cmd_handler=self._handle_command)
 
     def _create_climate(self, entity_id: str, name: str, device: SmartThingsDevice, area: Optional[str]) -> Climate:
         features = []
@@ -500,6 +518,16 @@ class SmartThingsEntityFactory:
             mute_value = main_component["audioVolume"].get("mute", {}).get("value")
             if mute_value is not None:
                 entity.attributes[MediaAttr.MUTED] = mute_value == "muted"
+        
+        # Handle current input source
+        if "mediaInputSource" in main_component:
+            source_value = main_component["mediaInputSource"].get("inputSource", {}).get("value")
+            if source_value is not None:
+                entity.attributes[MediaAttr.SOURCE] = str(source_value)
+        elif "samsungvd.mediaInputSource" in main_component:
+            source_value = main_component["samsungvd.mediaInputSource"].get("inputSource", {}).get("value")
+            if source_value is not None:
+                entity.attributes[MediaAttr.SOURCE] = str(source_value)
 
     def _update_climate_attributes(self, entity: Climate, main_component: Dict[str, Any]):
         if "thermostat" in main_component:
@@ -556,160 +584,4 @@ class SmartThingsEntityFactory:
                 return StatusCodes.NOT_IMPLEMENTED
             
             # Execute command synchronously
-            async with self.client:
-                command_success = await self.client.execute_command(device_id, capability, command, args)
-            
-            if not command_success:
-                _LOG.error(f"Command failed for {entity.name}: {cmd_id}")
-                return StatusCodes.SERVER_ERROR
-            
-            # Wait for device to process command, then verify state
-            await self._verify_command_result(entity, device_id, cmd_id)
-            
-            _LOG.info(f"Command completed successfully: {entity.name} -> {cmd_id}")
-            return StatusCodes.OK
-                
-        except Exception as e:
-            _LOG.error(f"Command failed for {entity.name}: {e}")
-            return StatusCodes.SERVER_ERROR
-        finally:
-            # Always clear the in-progress flag
-            self.command_in_progress[device_id] = False
-
-    async def _verify_command_result(self, entity, device_id: str, cmd_id: str):
-        """Smart verification that respects rate limits"""
-        try:
-            # Skip verification if we're hitting rate limits - let polling handle it
-            if hasattr(self.client, '_last_rate_limit') and time.time() - self.client._last_rate_limit < 30:
-                _LOG.info(f"Skipping verification due to recent rate limit, polling will catch up: {entity.name}")
-                return
-                
-            # Single verification attempt after 2 seconds to give device time to respond
-            await asyncio.sleep(2.0)
-            
-            try:
-                async with self.client:
-                    device_status = await self.client.get_device_status(device_id)
-                    
-                if device_status:
-                    old_attributes = dict(entity.attributes)
-                    self.update_entity_attributes(entity, device_status)
-                    
-                    if old_attributes != entity.attributes:
-                        self.api.configured_entities.update_attributes(entity.id, entity.attributes)
-                        _LOG.info(f"Command verification success: {entity.name} -> {entity.attributes}")
-                    else:
-                        _LOG.debug(f"No state change yet for {entity.name}, polling will catch up")
-                else:
-                    _LOG.debug(f"No status returned for {entity.name}, polling will catch up")
-                    
-            except Exception as e:
-                if "429" in str(e):
-                    _LOG.info(f"Rate limited during verification for {entity.name}, polling will catch up")
-                    # Mark rate limit so future commands can skip verification
-                    self.client._last_rate_limit = time.time()
-                else:
-                    _LOG.warning(f"Verification failed for {entity.name}: {e}")
-                        
-        except Exception as e:
-            _LOG.error(f"Command verification error for {entity.name}: {e}")
-
-    def _map_command(self, entity_type: str, cmd_id: str, params: Dict[str, Any], entity, capabilities: set) -> tuple:
-        capability = command = args = None
-        
-        if entity_type == EntityType.SWITCH:
-            if "lock" in capabilities:
-                if cmd_id == 'on':
-                    capability, command = 'lock', 'lock'
-                elif cmd_id == 'off':
-                    capability, command = 'lock', 'unlock'
-                elif cmd_id == 'toggle':
-                    current_state = entity.attributes.get(SwitchAttr.STATE)
-                    if current_state == SwitchStates.ON:
-                        capability, command = 'lock', 'unlock'
-                    else:
-                        capability, command = 'lock', 'lock'
-            else:
-                if cmd_id == 'on':
-                    capability, command = 'switch', 'on'
-                elif cmd_id == 'off':
-                    capability, command = 'switch', 'off'
-                elif cmd_id == 'toggle':
-                    current_state = entity.attributes.get(SwitchAttr.STATE)
-                    if current_state == SwitchStates.ON:
-                        capability, command = 'switch', 'off'
-                    else:
-                        capability, command = 'switch', 'on'
-        
-        elif entity_type == EntityType.LIGHT:
-            if cmd_id == 'on':
-                capability, command = 'switch', 'on'
-            elif cmd_id == 'off':
-                capability, command = 'switch', 'off'
-            elif cmd_id == 'toggle':
-                current_state = entity.attributes.get(LightAttr.STATE)
-                if current_state == LightStates.ON:
-                    capability, command = 'switch', 'off'
-                else:
-                    capability, command = 'switch', 'on'
-        
-        elif entity_type == EntityType.COVER:
-            if cmd_id == 'open':
-                if "doorControl" in capabilities:
-                    capability, command = 'doorControl', 'open'
-                elif "windowShade" in capabilities:
-                    capability, command = 'windowShade', 'open'
-            elif cmd_id == 'close':
-                if "doorControl" in capabilities:
-                    capability, command = 'doorControl', 'close'
-                elif "windowShade" in capabilities:
-                    capability, command = 'windowShade', 'close'
-            elif cmd_id == 'stop':
-                if "doorControl" in capabilities:
-                    capability, command = 'doorControl', 'stop'
-                elif "windowShade" in capabilities:
-                    capability, command = 'windowShade', 'stop'
-        
-        elif entity_type == EntityType.MEDIA_PLAYER:
-            if cmd_id == 'on':
-                capability, command = 'switch', 'on'
-            elif cmd_id == 'off':
-                capability, command = 'switch', 'off'
-            elif cmd_id == 'toggle':
-                current_state = entity.attributes.get(MediaAttr.STATE)
-                if current_state == MediaStates.ON:
-                    capability, command = 'switch', 'off'
-                else:
-                    capability, command = 'switch', 'on'
-            # Add volume control commands
-            elif cmd_id == 'volume_up':
-                if "audioVolume" in capabilities:
-                    capability, command = 'audioVolume', 'volumeUp'
-            elif cmd_id == 'volume_down':
-                if "audioVolume" in capabilities:
-                    capability, command = 'audioVolume', 'volumeDown'
-            elif cmd_id == 'mute_toggle':
-                if "audioMute" in capabilities:
-                    capability, command = 'audioMute', 'mute'
-                elif "audioVolume" in capabilities:
-                    capability, command = 'audioVolume', 'mute'
-            # Add input source selection
-            elif cmd_id == 'select_source':
-                if "mediaInputSource" in capabilities and params.get('source'):
-                    capability, command = 'mediaInputSource', 'setInputSource'
-                    args = [params.get('source')]
-                elif "samsungvd.mediaInputSource" in capabilities and params.get('source'):
-                    capability, command = 'samsungvd.mediaInputSource', 'setInputSource'
-                    args = [params.get('source')]
-        
-        elif entity_type == EntityType.CLIMATE:
-            if cmd_id == 'on':
-                capability, command = 'thermostat', 'auto'
-            elif cmd_id == 'off':
-                capability, command = 'thermostat', 'off'
-        
-        elif entity_type == EntityType.BUTTON:
-            if cmd_id == 'push':
-                capability, command = 'momentary', 'push'
-        
-        return capability, command, args
+            async with self

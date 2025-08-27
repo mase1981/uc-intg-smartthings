@@ -5,4 +5,4 @@ SmartThings Integration for Unfolded Circle Remote 2/3
 :license: MPL-2.0, see LICENSE for more details
 """
 
-__version__ = "1.1.5"
+__version__ = "1.1.6"

@@ -51,7 +51,6 @@ class SmartThingsEntityFactory:
         _LOG.info(f"  - Device Type: {device_type}")
         _LOG.info(f"  - Device Name: {device_name}")
         
-        # Enhanced Samsung device detection
         if self._is_samsung_tv(device_name, device_type, capabilities):
             _LOG.info(f"Samsung TV detected: {device.label} -> MEDIA_PLAYER")
             return EntityType.MEDIA_PLAYER
@@ -145,7 +144,6 @@ class SmartThingsEntityFactory:
         return None
 
     def _is_samsung_tv(self, device_name: str, device_type: str, capabilities: set) -> bool:
-        """Enhanced Samsung TV detection"""
         samsung_tv_indicators = [
             # Direct name matches
             "samsung" and "tv" in device_name,
@@ -161,14 +159,15 @@ class SmartThingsEntityFactory:
         return any(samsung_tv_indicators)
 
     def _is_samsung_soundbar(self, device_name: str, device_type: str, capabilities: set) -> bool:
-        """Enhanced Samsung Soundbar detection"""
         samsung_soundbar_indicators = [
             # Direct name matches
-            "samsung" and "soundbar" in device_name,
-            "samsung" and "q70t" in device_name,
+            "samsung" in device_name and "soundbar" in device_name,
+            "samsung" in device_name and "q70t" in device_name,
+            "samsung" in device_name and "q90r" in device_name,
             "soundbar" in device_name,
             # Device type matches
             "soundbar" in device_type,
+            "network audio" in device_type,
             "speaker" in device_type and "samsung" in device_name,
             # Capability patterns common to Samsung soundbars
             {"audioVolume", "switch"}.issubset(capabilities),
@@ -365,7 +364,7 @@ class SmartThingsEntityFactory:
         
         if any(word in device_name for word in ["tv", "television"]) or "tv" in device_type:
             device_class = MediaClasses.TV
-        elif any(word in device_name for word in ["soundbar", "q70t"]) or "soundbar" in device_type:
+        elif any(word in device_name for word in ["soundbar", "q70t", "q90r"]) or "soundbar" in device_type or "network audio" in device_type:
             device_class = MediaClasses.SPEAKER
         elif any(word in device_name for word in ["receiver", "amplifier"]):
             device_class = MediaClasses.RECEIVER
@@ -375,12 +374,12 @@ class SmartThingsEntityFactory:
         
         # Set available input sources for devices with input capabilities
         if ("mediaInputSource" in device.capabilities or "samsungvd.mediaInputSource" in device.capabilities):
-            if "samsung" in device_name.lower() and "soundbar" in device_name.lower():
-                # Samsung soundbar input sources based on API error message
+            if "samsung" in device_name.lower() and ("soundbar" in device_name.lower() or "q90r" in device_name.lower()):
+                # Samsung soundbar input sources - updated list with network instead of wifi
                 initial_attributes[MediaAttr.SOURCE_LIST] = [
                     "AM", "CD", "FM", "HDMI", "HDMI1", "HDMI2", "HDMI3", "HDMI4", "HDMI5", "HDMI6", 
-                    "digitalTv", "USB", "YouTube", "aux", "bluetooth", "digital", "melon", "wifi", 
-                    "network", "optical", "coaxial", "analog1", "analog2", "analog3", "phono"
+                    "digitalTv", "USB", "YouTube", "aux", "bluetooth", "digital", "melon", "network", 
+                    "optical", "coaxial", "analog1", "analog2", "analog3", "phono"
                 ]
             else:
                 # Generic input sources for other devices
@@ -519,7 +518,7 @@ class SmartThingsEntityFactory:
             if mute_value is not None:
                 entity.attributes[MediaAttr.MUTED] = mute_value == "muted"
         
-        # Handle current input source
+        # Handle current input source - check both capability types
         if "mediaInputSource" in main_component:
             source_value = main_component["mediaInputSource"].get("inputSource", {}).get("value")
             if source_value is not None:
@@ -605,7 +604,6 @@ class SmartThingsEntityFactory:
             self.command_in_progress[device_id] = False
 
     async def _verify_command_result(self, entity, device_id: str, cmd_id: str):
-        """Smart verification that respects rate limits"""
         try:
             # Skip verification if we're hitting rate limits - let polling handle it
             if hasattr(self.client, '_last_rate_limit') and time.time() - self.client._last_rate_limit < 30:
@@ -709,7 +707,7 @@ class SmartThingsEntityFactory:
                     capability, command = 'switch', 'off'
                 else:
                     capability, command = 'switch', 'on'
-            # Add volume control commands
+            # Volume control commands
             elif cmd_id == 'volume_up':
                 if "audioVolume" in capabilities:
                     capability, command = 'audioVolume', 'volumeUp'
@@ -717,11 +715,20 @@ class SmartThingsEntityFactory:
                 if "audioVolume" in capabilities:
                     capability, command = 'audioVolume', 'volumeDown'
             elif cmd_id == 'mute_toggle':
+                # FIXED: Samsung soundbar mute toggle - check current mute state
+                current_muted = entity.attributes.get(MediaAttr.MUTED, False)
                 if "audioMute" in capabilities:
-                    capability, command = 'audioMute', 'mute'
+                    if current_muted:
+                        capability, command = 'audioMute', 'unmute'
+                    else:
+                        capability, command = 'audioMute', 'mute'
                 elif "audioVolume" in capabilities:
-                    capability, command = 'audioVolume', 'mute'
-            # Add input source selection
+                    # Fallback to audioVolume capability for mute/unmute
+                    if current_muted:
+                        capability, command = 'audioVolume', 'unmute'
+                    else:
+                        capability, command = 'audioVolume', 'mute'
+            # Input source selection
             elif cmd_id == 'select_source':
                 if "mediaInputSource" in capabilities and params.get('source'):
                     capability, command = 'mediaInputSource', 'setInputSource'

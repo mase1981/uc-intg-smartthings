@@ -128,6 +128,7 @@ class DeviceAnalyzer:
             # Direct name matches
             "samsung" in device_name and "soundbar" in device_name,
             "samsung" in device_name and "q70t" in device_name,
+            "samsung" in device_name and "q90r" in device_name,  # Added Q90R detection
             "soundbar" in device_name,
             # Device type matches
             "soundbar" in device_type,

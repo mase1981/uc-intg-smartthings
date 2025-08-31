@@ -375,10 +375,10 @@ class SmartThingsEntityFactory:
         # Set available input sources for devices with input capabilities
         if ("mediaInputSource" in device.capabilities or "samsungvd.mediaInputSource" in device.capabilities):
             if "samsung" in device_name.lower() and ("soundbar" in device_name.lower() or "q90r" in device_name.lower()):
-                # Samsung soundbar input sources - updated list with network instead of wifi
+                # Samsung soundbar input sources - FIXED: Added wifi as alias for network
                 initial_attributes[MediaAttr.SOURCE_LIST] = [
                     "AM", "CD", "FM", "HDMI", "HDMI1", "HDMI2", "HDMI3", "HDMI4", "HDMI5", "HDMI6", 
-                    "digitalTv", "USB", "YouTube", "aux", "bluetooth", "digital", "melon", "network", 
+                    "digitalTv", "USB", "YouTube", "aux", "bluetooth", "digital", "melon", "network", "wifi",
                     "optical", "coaxial", "analog1", "analog2", "analog3", "phono"
                 ]
             else:
@@ -515,6 +515,12 @@ class SmartThingsEntityFactory:
                 entity.attributes[MediaAttr.VOLUME] = int(volume_value)
             
             mute_value = main_component["audioVolume"].get("mute", {}).get("value")
+            if mute_value is not None:
+                entity.attributes[MediaAttr.MUTED] = mute_value == "muted"
+        
+        # FIXED: Enhanced mute status detection
+        if "audioMute" in main_component:
+            mute_value = main_component["audioMute"].get("mute", {}).get("value")
             if mute_value is not None:
                 entity.attributes[MediaAttr.MUTED] = mute_value == "muted"
         
@@ -715,27 +721,48 @@ class SmartThingsEntityFactory:
                 if "audioVolume" in capabilities:
                     capability, command = 'audioVolume', 'volumeDown'
             elif cmd_id == 'mute_toggle':
-                # FIXED: Samsung soundbar mute toggle - check current mute state
+                # FIXED: Improved mute toggle logic for Samsung soundbars
                 current_muted = entity.attributes.get(MediaAttr.MUTED, False)
+                _LOG.info(f"Mute toggle: current muted state = {current_muted}")
+                
+                # Priority 1: Use dedicated audioMute capability if available
                 if "audioMute" in capabilities:
                     if current_muted:
                         capability, command = 'audioMute', 'unmute'
+                        _LOG.info(f"Using audioMute.unmute for {entity.name}")
                     else:
                         capability, command = 'audioMute', 'mute'
+                        _LOG.info(f"Using audioMute.mute for {entity.name}")
+                # Priority 2: Fall back to audioVolume capability
                 elif "audioVolume" in capabilities:
-                    # Fallback to audioVolume capability for mute/unmute
                     if current_muted:
                         capability, command = 'audioVolume', 'unmute'
+                        _LOG.info(f"Using audioVolume.unmute for {entity.name}")
                     else:
                         capability, command = 'audioVolume', 'mute'
-            # Input source selection
+                        _LOG.info(f"Using audioVolume.mute for {entity.name}")
+                else:
+                    _LOG.warning(f"No mute capability found for {entity.name}")
+                    
+            # Input source selection with wifi alias handling
             elif cmd_id == 'select_source':
-                if "mediaInputSource" in capabilities and params.get('source'):
-                    capability, command = 'mediaInputSource', 'setInputSource'
-                    args = [params.get('source')]
-                elif "samsungvd.mediaInputSource" in capabilities and params.get('source'):
-                    capability, command = 'samsungvd.mediaInputSource', 'setInputSource'
-                    args = [params.get('source')]
+                source_param = params.get('source')
+                if source_param:
+                    # FIXED: Handle wifi -> network mapping for Samsung soundbars
+                    if source_param.lower() == 'wifi':
+                        _LOG.info(f"Converting 'wifi' to 'network' for Samsung soundbar")
+                        source_param = 'network'
+                    
+                    if "mediaInputSource" in capabilities:
+                        capability, command = 'mediaInputSource', 'setInputSource'
+                        args = [source_param]
+                        _LOG.info(f"Setting input source to: {source_param}")
+                    elif "samsungvd.mediaInputSource" in capabilities:
+                        capability, command = 'samsungvd.mediaInputSource', 'setInputSource'
+                        args = [source_param]
+                        _LOG.info(f"Setting Samsung VD input source to: {source_param}")
+                    else:
+                        _LOG.warning(f"No input source capability found for {entity.name}")
         
         elif entity_type == EntityType.CLIMATE:
             if cmd_id == 'on':

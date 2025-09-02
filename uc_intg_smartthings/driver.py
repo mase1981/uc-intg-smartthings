@@ -33,194 +33,191 @@ class SmartThingsIntegration:
         
         self.entity_last_poll = {}
         self.subscribed_entities = set()
-        self.pending_subscriptions = set()  # NEW: Track pending subscriptions
         self.polling_active = False
         self.devices_in_command = set()
-        self.initialization_complete = False  # NEW: Track initialization state
+        
+        # Critical: Entities are created as placeholders immediately
+        self.placeholder_entities_created = False
         
         self._register_event_handlers()
         
     def _register_event_handlers(self):
         @self.api.listens_to(Events.CONNECT)
         async def on_connect():
-            _LOG.info("Connected to UC Remote")
-            if self.config_manager.is_configured():
-                await self._initialize_integration()
+            _LOG.info("Connected to UC Remote - initializing integration")
+            
+            # Always try to load existing configuration first
+            if await self._load_existing_configuration():
+                _LOG.info("Found existing configuration - initializing with live data")
+                await self._initialize_with_existing_config()
+                # Start monitoring immediately after successful initialization
+                await self._start_monitoring_loop()
             else:
+                _LOG.info("No configuration found - setting disconnected state")
                 await self.api.set_device_state(DeviceStates.DISCONNECTED)
                 
         @self.api.listens_to(Events.DISCONNECT)
         async def on_disconnect():
             await self._cleanup()
 
-        @self.api.listens_to(Events.SUBSCRIBE_ENTITIES)
-        async def on_subscribe_entities(entity_ids: List[str]):
-            _LOG.info(f"Remote requested subscription to {len(entity_ids)} entities")
-            
-            if not self.client or not self.factory:
-                _LOG.warning("Subscription request received before initialization complete - storing for later")
-                # Store the subscription request for when initialization is complete
-                self.pending_subscriptions.update(eid for eid in entity_ids if eid.startswith("st_"))
-                return
-            
-            # Filter for SmartThings entities
-            st_entities = {eid for eid in entity_ids if eid.startswith("st_")}
-            
-            # Check which entities are actually available
-            available_entities = set()
-            unavailable_entities = set()
-            
-            for entity_id in st_entities:
-                if entity_id in [entity.id for entity in self.api.available_entities.entities]:
-                    available_entities.add(entity_id)
-                else:
-                    unavailable_entities.add(entity_id)
-            
-            if unavailable_entities:
-                _LOG.warning(f"Some entities not yet available: {unavailable_entities}")
-                # Store unavailable entities for retry after initialization
-                self.pending_subscriptions.update(unavailable_entities)
-            
-            if available_entities:
-                _LOG.info(f"Subscribing to {len(available_entities)} available entities")
-                self.subscribed_entities = available_entities
-                await self._sync_initial_state_immediate(list(available_entities))
-                await self._start_polling()
-            
-    async def setup_handler(self, msg: SetupDriver) -> Any:
-        setup_result = await self.setup_flow.handle_setup_request(msg)
-        if isinstance(setup_result, uc.SetupComplete):
-            _LOG.info("Setup complete. Will initialize on next connect.")
-        return setup_result
-    
-    async def _initialize_integration(self):
-        await self._cleanup()
+        # NOTE: Removed SUBSCRIBE_ENTITIES handler - monitoring starts from on_connect instead
+        
+    async def _load_existing_configuration(self) -> bool:
+        """Load existing configuration and create placeholder entities if found."""
         try:
-            await self.api.set_device_state(DeviceStates.CONNECTING)
+            # Force fresh config load from filesystem (Fix #2)
+            self.config_manager = ConfigManager(self.api.config_dir_path)
+            if not self.config_manager.is_configured():
+                return False
+                
+            # Create fresh config instance to avoid stale data
             self.config = self.config_manager.load_config()
-            access_token = self.config.get("access_token")
-            if not access_token: 
-                _LOG.error("No access token found in configuration")
-                return
-
-            self.client = SmartThingsClient(access_token)
-            self.factory = SmartThingsEntityFactory(self.client, self.api)
             
-            # Set up command callback to track devices in command state
-            self.factory.command_callback = self.track_device_command
+            if not self.config.get("access_token") or not self.config.get("location_id"):
+                _LOG.warning("Configuration incomplete - missing token or location")
+                return False
+                
+            _LOG.info("Valid configuration found - creating placeholder entities")
             
-            await self._create_entities()
+            # Create placeholder entities immediately if not already done
+            if not self.placeholder_entities_created:
+                await self._create_placeholder_entities()
+                self.placeholder_entities_created = True
             
-            # Mark initialization as complete
-            self.initialization_complete = True
-            
-            await self.api.set_device_state(DeviceStates.CONNECTED)
-            _LOG.info("SmartThings integration initialized successfully")
-            
-            # Process any pending subscriptions now that entities are available
-            await self._process_pending_subscriptions()
+            return True
             
         except Exception as e:
-            _LOG.error(f"Failed to initialize integration: {e}", exc_info=True)
-            await self.api.set_device_state(DeviceStates.ERROR)
+            _LOG.error(f"Failed to load existing configuration: {e}")
+            return False
     
-    async def _process_pending_subscriptions(self):
-        """Process subscription requests that arrived before initialization was complete."""
-        if not self.pending_subscriptions:
-            return
-            
-        _LOG.info(f"Processing {len(self.pending_subscriptions)} pending subscriptions")
-        
-        # Check which pending entities are now available
-        available_entities = set()
-        still_unavailable = set()
-        
-        available_entity_ids = {entity.id for entity in self.api.available_entities.entities}
-        
-        for entity_id in self.pending_subscriptions:
-            if entity_id in available_entity_ids:
-                available_entities.add(entity_id)
-            else:
-                still_unavailable.add(entity_id)
-        
-        if still_unavailable:
-            _LOG.warning(f"Some entities still not available after initialization: {still_unavailable}")
-        
-        if available_entities:
-            _LOG.info(f"Starting subscription for {len(available_entities)} previously pending entities")
-            self.subscribed_entities.update(available_entities)
-            await self._sync_initial_state_immediate(list(available_entities))
-            await self._start_polling()
-        
-        # Clear processed subscriptions
-        self.pending_subscriptions.clear()
-    
-    async def _create_entities(self):
-        if not self.client or not self.factory: 
-            _LOG.error("Client or factory not available for entity creation")
-            return
-            
+    async def _create_placeholder_entities(self):
+        """Create placeholder entities immediately to handle early subscription requests."""
         try:
-            location_id = self.config.get("location_id")
-            if not location_id: 
-                _LOG.error("No location_id found in configuration")
+            # Create client with existing token
+            access_token = self.config.get("access_token")
+            if not access_token:
                 return
                 
+            self.client = SmartThingsClient(access_token)
+            self.factory = SmartThingsEntityFactory(self.client, self.api)
+            self.factory.command_callback = self.track_device_command
+            
+            # Get device list to create placeholder entities
+            location_id = self.config.get("location_id")
+            if not location_id:
+                return
+                
+            _LOG.info("Creating placeholder entities for early subscription handling...")
+            
+            # Connect client explicitly (Fix #4)
             async with self.client:
                 devices_raw = await self.client.get_devices(location_id)
                 rooms = await self.client.get_rooms(location_id)
             
             room_names = {room["roomId"]: room["name"] for room in rooms}
+            
+            # Clear any existing entities and create fresh ones
             self.api.available_entities.clear()
             created_count = 0
             
-            _LOG.info(f"Processing {len(devices_raw)} devices from SmartThings...")
-            
             for device_data in devices_raw:
                 try:
-                    # Enhanced logging for debugging device detection issues
-                    device_name = device_data.get("label") or device_data.get("name", "Unknown")
-                    device_type = device_data.get("deviceTypeName", "")
-                    capabilities = set()
-                    
-                    # Extract capabilities for logging
-                    for component in device_data.get("components", []):
-                        for cap in component.get("capabilities", []):
-                            cap_id = cap.get("id", "")
-                            if cap_id:
-                                capabilities.add(cap_id)
-                    
-                    _LOG.debug(f"Processing device: {device_name}")
-                    _LOG.debug(f"  - Device Type: {device_type}")
-                    _LOG.debug(f"  - Capabilities ({len(capabilities)}): {list(capabilities)}")
-                    
                     entity = self.factory.create_entity(device_data, self.config, room_names.get(device_data.get("roomId")))
                     if entity:
                         if self.api.available_entities.add(entity):
                             created_count += 1
-                            _LOG.info(f"✅ Successfully added entity: {entity.id} ({entity.name})")
-                        else:
-                            _LOG.warning(f"⚠ Failed to add entity to UC API: {entity.id}")
-                    else:
-                        _LOG.debug(f"No entity created for device: {device_name}")
+                            _LOG.debug(f"Created placeholder entity: {entity.id} ({entity.name})")
                         
                 except Exception as e:
                     device_name = device_data.get("label", device_data.get("name", "Unknown"))
-                    _LOG.error(f"Error creating entity for device {device_name}: {e}", exc_info=True)
-
-            _LOG.info(f"Entity creation summary: {created_count} entities created from {len(devices_raw)} devices")
+                    _LOG.error(f"Error creating placeholder entity for {device_name}: {e}")
             
-            if created_count == 0:
-                _LOG.warning("No entities were created! Check device support and configuration.")
-            else:
-                _LOG.info(f"✅ Successfully created {created_count} entities")
-
+            _LOG.info(f"Created {created_count} placeholder entities")
+            
         except Exception as e:
-            _LOG.error(f"Failed to create entities: {e}", exc_info=True)
-
-    # ... rest of the methods remain the same ...
+            _LOG.error(f"Failed to create placeholder entities: {e}")
+    
+    async def _initialize_with_existing_config(self):
+        """Initialize integration with existing configuration and populate entities with live data."""
+        try:
+            await self.api.set_device_state(DeviceStates.CONNECTING)
+            
+            if not self.client:
+                access_token = self.config.get("access_token")
+                self.client = SmartThingsClient(access_token)
+                
+            if not self.factory:
+                self.factory = SmartThingsEntityFactory(self.client, self.api)
+                self.factory.command_callback = self.track_device_command
+            
+            # Explicit client connection (Fix #4)
+            _LOG.info("Connecting to SmartThings API...")
+            
+            # Test connection and populate entities with live data
+            location_id = self.config.get("location_id")
+            async with self.client:
+                # Verify connection works
+                locations = await self.client.get_locations()
+                if not any(loc["locationId"] == location_id for loc in locations):
+                    raise Exception("Location no longer accessible")
+                
+                _LOG.info("SmartThings API connection successful - entities ready")
+            
+            await self.api.set_device_state(DeviceStates.CONNECTED)
+            _LOG.info("SmartThings integration initialized successfully")
+            
+        except Exception as e:
+            _LOG.error(f"Failed to initialize with existing config: {e}")
+            await self.api.set_device_state(DeviceStates.ERROR)
+            raise
+    
+    async def setup_handler(self, msg: SetupDriver) -> Any:
+        """Handle setup flow and initialize integration after completion."""
+        setup_result = await self.setup_flow.handle_setup_request(msg)
+        
+        if isinstance(setup_result, uc.SetupComplete):
+            _LOG.info("Setup complete - initializing integration")
+            
+            # Load the newly saved configuration
+            if await self._load_existing_configuration():
+                await self._initialize_with_existing_config()
+                # Start monitoring after successful setup (Fix #5)
+                await self._start_monitoring_loop()
+            
+        return setup_result
+    
+    async def _start_monitoring_loop(self):
+        """Start monitoring loop - called from both on_connect and setup completion."""
+        if self.status_update_task and not self.status_update_task.done():
+            _LOG.debug("Monitoring already running")
+            return
+            
+        if not self.client or not self.factory:
+            _LOG.warning("Cannot start monitoring - client or factory not available")
+            return
+            
+        # Get currently subscribed entities from UC system
+        subscribed_entity_ids = set()
+        for entity in self.api.configured_entities.entities:
+            if entity.id.startswith("st_"):
+                subscribed_entity_ids.add(entity.id)
+        
+        if subscribed_entity_ids:
+            _LOG.info(f"Starting monitoring for {len(subscribed_entity_ids)} subscribed entities")
+            self.subscribed_entities = subscribed_entity_ids
+            
+            # Sync initial state immediately
+            await self._sync_initial_state_immediate(list(subscribed_entity_ids))
+            
+            # Start background polling
+            self.polling_active = True
+            self.status_update_task = self.loop.create_task(self._polling_loop())
+            _LOG.info("Background monitoring started")
+        else:
+            _LOG.info("No subscribed entities found - monitoring will start when entities are subscribed")
 
     async def _sync_initial_state_immediate(self, entity_ids: List[str]):
+        """Sync initial state for specified entities."""
         _LOG.info(f"Syncing initial state for {len(entity_ids)} entities...")
         
         import time
@@ -251,6 +248,7 @@ class SmartThingsIntegration:
         _LOG.info(f"Initial state synced for {synced_count}/{len(entity_ids)} entities in {sync_time:.1f}s")
 
     async def _sync_single_entity(self, entity, device_id: str) -> bool:
+        """Sync a single entity's state."""
         try:
             async with self.client:
                 device_status = await self.client.get_device_status(device_id)
@@ -272,16 +270,8 @@ class SmartThingsIntegration:
             _LOG.error(f"Failed to sync {entity.id}: {e}")
             return False
 
-    async def _start_polling(self):
-        if self.status_update_task and not self.status_update_task.done():
-            _LOG.debug("Polling already running")
-            return
-        
-        self.polling_active = True
-        self.status_update_task = self.loop.create_task(self._polling_loop())
-        _LOG.info("Background polling started")
-    
     async def _polling_loop(self):
+        """Background polling loop for entity state updates."""
         consecutive_errors = 0
         max_consecutive_errors = 5
         
@@ -316,7 +306,7 @@ class SmartThingsIntegration:
         self.polling_active = False
 
     async def _poll_entities_intelligently(self):
-        """Poll entities with command awareness - skip devices currently executing commands"""
+        """Poll entities with command awareness - skip devices currently executing commands."""
         import time
         now = time.time()
         entities_to_poll = []
@@ -363,7 +353,7 @@ class SmartThingsIntegration:
             _LOG.info(f"Detected {changes_detected} state changes in polling")
 
     async def _poll_entity_batch(self, entity_batch):
-        """Poll a batch of entities"""
+        """Poll a batch of entities."""
         import time
         now = time.time()
         changes_detected = 0
@@ -394,7 +384,7 @@ class SmartThingsIntegration:
         return changes_detected
 
     def _get_entity_polling_interval(self, entity_id: str, now: float) -> float:
-        """Get polling interval for entity based on type and activity"""
+        """Get polling interval for entity based on type and activity."""
         base_interval = self.config.get("polling_interval", 12)
         
         # Default intervals based on entity type
@@ -414,7 +404,7 @@ class SmartThingsIntegration:
             return base_interval
 
     def _calculate_polling_interval(self) -> float:
-        """Calculate dynamic polling interval based on rate limits and activity"""
+        """Calculate dynamic polling interval based on rate limits and activity."""
         import time
         
         # Much slower polling to avoid rate limits
@@ -439,7 +429,7 @@ class SmartThingsIntegration:
             return max(base_config * 4, 30)  # Minimum 30 seconds for many entities
 
     def track_device_command(self, entity_id: str):
-        """Track when a device starts/stops command execution"""
+        """Track when a device starts/stops command execution."""
         device_id = entity_id[3:] if entity_id.startswith("st_") else entity_id
         self.devices_in_command.add(device_id)
         
@@ -452,8 +442,8 @@ class SmartThingsIntegration:
         _LOG.debug(f"Tracking command for device {device_id}")
 
     async def _cleanup(self):
+        """Clean up resources."""
         self.polling_active = False
-        self.initialization_complete = False
         
         if self.status_update_task and not self.status_update_task.done():
             self.status_update_task.cancel()
@@ -467,16 +457,32 @@ class SmartThingsIntegration:
         
         self.entity_last_poll.clear()
         self.subscribed_entities.clear()
-        self.pending_subscriptions.clear()
         self.devices_in_command.clear()
+        self.placeholder_entities_created = False
             
         _LOG.info("Integration cleanup completed")
 
 async def main():
+    """Main function - creates placeholder entities immediately."""
     loop = asyncio.get_event_loop()
     api = IntegrationAPI(loop)
     integration = SmartThingsIntegration(api, loop)
+    
     await api.init("driver.json", integration.setup_handler)
+    
+    # Critical Fix #1: Create placeholder entities immediately after API init
+    # This ensures entities exist before any subscription requests arrive
+    if integration.config_manager.is_configured():
+        _LOG.info("Configuration found - creating placeholder entities immediately")
+        try:
+            # Force fresh config load
+            integration.config = integration.config_manager.load_config()
+            if integration.config.get("access_token") and integration.config.get("location_id"):
+                await integration._create_placeholder_entities()
+                integration.placeholder_entities_created = True
+                _LOG.info("Placeholder entities created successfully")
+        except Exception as e:
+            _LOG.error(f"Failed to create initial placeholder entities: {e}")
     
     _LOG.info("SmartThings Integration is now running. Press Ctrl+C to stop.")
     try:

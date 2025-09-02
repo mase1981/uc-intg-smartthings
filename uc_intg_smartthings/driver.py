@@ -19,6 +19,7 @@ from uc_intg_smartthings.config import ConfigManager
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 _LOG = logging.getLogger(__name__)
 
+# CRITICAL FIX #1: Global API with simple loop creation (matches working patterns)
 loop = asyncio.new_event_loop()
 asyncio.set_event_loop(loop)
 API = IntegrationAPI(loop)  # Global, always available
@@ -50,6 +51,7 @@ def track_device_command(entity_id: str):
     asyncio.create_task(remove_device_from_command())
     _LOG.debug(f"Tracking command for device {device_id}")
 
+# CRITICAL FIX #2: Use decorator pattern for synchronous event handling
 @API.listens_to(Events.CONNECT)
 async def on_connect() -> None:
     """Handle connection events - recreate entities if missing."""
@@ -341,7 +343,6 @@ async def _polling_loop():
             error_sleep = min(30, 5 * consecutive_errors)
             await asyncio.sleep(error_sleep)
     
-    global _polling_active
     _polling_active = False
 
 async def _poll_entities_intelligently():

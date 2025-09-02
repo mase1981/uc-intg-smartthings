@@ -2,7 +2,7 @@
 :copyright: (c) 2025 by Meir Miyara
 :license: MPL-2.0, see LICENSE for more details.
 
-Corrected version to ensure persistence across reboots.
+Corrected version to ensure persistence and fix AttributeError.
 """
 
 import asyncio
@@ -12,11 +12,12 @@ import os
 from typing import Any, Dict, Optional, List, Set
 
 from ucapi import IntegrationAPI, api_definitions
+# **FIX**: Import the base Entity class from the correct module
+from ucapi.entity import Entity
 from ucapi.api_definitions import Events, DeviceStates, SetupDriver, WsMsgEvents
 import ucapi.api_definitions as uc
 
 # --- Helper Classes (included for a self-contained example) ---
-# In a real project, these would be in separate files.
 
 class ConfigManager:
     """Manages loading and saving of configuration files."""
@@ -41,8 +42,11 @@ class ConfigManager:
     def load_devices(self) -> List[Dict[str, Any]]:
         if not os.path.exists(self.devices_path):
             return []
-        with open(self.devices_path, 'r') as f:
-            return json.load(f)
+        try:
+            with open(self.devices_path, 'r') as f:
+                return json.load(f)
+        except (json.JSONDecodeError, FileNotFoundError):
+            return []
 
     def save_devices(self, devices: List[Dict[str, Any]]):
         with open(self.devices_path, 'w') as f:
@@ -57,7 +61,6 @@ class SmartThingsClient:
     async def get_devices(self, location_id: str) -> List[Dict]:
         _LOG.info("Fetching devices from SmartThings API...")
         # In a real implementation, this would make an HTTP request.
-        # Returning an empty list to allow the flow to work.
         return []
 
     async def get_rooms(self, location_id: str) -> List[Dict]:
@@ -65,7 +68,6 @@ class SmartThingsClient:
         return []
 
     async def get_device_status(self, device_id: str) -> Dict:
-        # Placeholder for fetching live status.
         return {}
 
     async def close(self):
@@ -79,18 +81,20 @@ class SmartThingsClient:
 
 class SmartThingsEntityFactory:
     """A placeholder for the entity factory."""
-    def __init__(self, client: SmartThingsClient, api: IntegrationAPI):
+    def __init__(self, client: Optional[SmartThingsClient], api: IntegrationAPI):
         self._client = client
         self._api = api
         self.command_callback = None
 
-    def create_entity(self, device_data: Dict, config: Dict, room_name: Optional[str]) -> Optional[api_definitions.Entity]:
+    # **FIX**: Corrected the type hint from api_definitions.Entity to Entity
+    def create_entity(self, device_data: Dict, config: Dict, room_name: Optional[str]) -> Optional[Entity]:
         # This factory would contain the logic to convert SmartThings device data
-        # into Unfolded Circle entity objects.
-        pass
+        # into Unfolded Circle entity objects (e.g., uc.Light, uc.Switch).
+        # Returning None as this is a placeholder.
+        return None
 
-    def update_entity_attributes(self, entity: api_definitions.Entity, status: Dict):
-        # This would update an entity's attributes based on new status data.
+    # **FIX**: Corrected the type hint from api_definitions.Entity to Entity
+    def update_entity_attributes(self, entity: Entity, status: Dict):
         pass
 
 class SmartThingsSetupFlow:
@@ -100,14 +104,13 @@ class SmartThingsSetupFlow:
         self._config_manager = config_manager
 
     async def handle_setup_request(self, msg: SetupDriver) -> Any:
-        # This would handle the multi-step setup process.
         # On the final step, it saves the config and returns SetupComplete.
         if msg.step_id == "finalize":
-             # Example: final configuration is received and saved
             final_config = msg.user_input
             self._config_manager.save_config(final_config)
             return uc.SetupComplete()
-        pass
+        # Placeholder for other setup steps
+        return None
 
 
 # --- Main Integration Logic ---
@@ -135,10 +138,8 @@ class SmartThingsIntegration:
         async def on_connect():
             _LOG.info("Connected to UC Remote")
             if self.config_manager.is_configured():
-                # Configuration exists, proceed with initialization
                 await self._initialize_integration()
             else:
-                # Not configured, wait for setup
                 await self.api.set_device_state(DeviceStates.AWAITING_SETUP)
                 
         @self.api.listens_to(Events.DISCONNECT)
@@ -149,33 +150,26 @@ class SmartThingsIntegration:
         async def on_subscribe_entities(entity_ids: List[str]):
             _LOG.info(f"Remote subscribed to entities: {entity_ids}")
             self.subscribed_entities = set(entity_ids)
-            # Perform an immediate poll of subscribed entities for quick feedback
             await self._poll_entities()
 
     async def setup_handler(self, msg: SetupDriver) -> Any:
         setup_result = await self.setup_flow.handle_setup_request(msg)
         if isinstance(setup_result, uc.SetupComplete):
             _LOG.info("Setup complete. Initializing integration immediately.")
-            # **FIX**: Initialize immediately after setup is complete
             await self._initialize_integration()
         return setup_result
     
     async def _load_entities_from_cache(self):
-        """
-        **FIX**: Load entities from a cached file on startup.
-        This pre-populates `api.available_entities` to prevent race conditions.
-        """
         _LOG.info("Loading entities from cache...")
         cached_devices = self.config_manager.load_devices()
         if not cached_devices:
             _LOG.info("No cached devices found.")
             return
 
-        # Lazily create the factory if it doesn't exist yet
         if not self.factory:
+            # We pass None for the client as it's not needed to create placeholder entities
             self.factory = SmartThingsEntityFactory(None, self.api)
         
-        # This assumes config is not needed to create placeholder entities
         config_stub = {} 
         for device_data in cached_devices:
             try:
@@ -187,11 +181,10 @@ class SmartThingsIntegration:
         _LOG.info(f"Loaded {len(self.api.available_entities)} entities from cache.")
 
     async def _initialize_integration(self):
-        await self._cleanup()
+        await self._cleanup(soft=True)
         try:
             await self.api.set_device_state(DeviceStates.CONNECTING)
             
-            # **FIX**: Ensure config is freshly loaded on each connect
             self.config = self.config_manager.load_config()
             access_token = self.config.get("access_token")
             if not access_token: 
@@ -200,14 +193,17 @@ class SmartThingsIntegration:
                 return
 
             self.client = SmartThingsClient(access_token)
-            self.factory = SmartThingsEntityFactory(self.client, self.api)
-            
+            if not self.factory:
+                self.factory = SmartThingsEntityFactory(self.client, self.api)
+            else:
+                # Update the factory with the live client
+                self.factory._client = self.client
+
             await self._sync_entities()
             
             await self.api.set_device_state(DeviceStates.CONNECTED)
             _LOG.info("SmartThings integration initialized successfully")
 
-            # **FIX**: Start the monitoring loop from a reliable location
             self._start_polling()
             
         except Exception as e:
@@ -215,10 +211,6 @@ class SmartThingsIntegration:
             await self.api.set_device_state(DeviceStates.ERROR)
     
     async def _sync_entities(self):
-        """
-        **FIX**: Fetch fresh device data, compare with cache, and update entities.
-        Saves the new device list to the cache for the next restart.
-        """
         if not self.client or not self.factory:
             _LOG.error("Client or factory not available for entity sync.")
             return
@@ -234,31 +226,26 @@ class SmartThingsIntegration:
                 fresh_devices = await self.client.get_devices(location_id)
                 rooms = await self.client.get_rooms(location_id)
             
-            # Save the fresh list to cache for the next run
             self.config_manager.save_devices(fresh_devices)
             
-            room_map = {room["roomId"]: room["name"] for room in rooms}
+            room_map = {room.get("roomId"): room.get("name") for room in rooms}
             
-            # Sync logic
             current_entity_ids = {e.id for e in self.api.available_entities}
-            fresh_device_ids = set()
+            fresh_entity_ids = set()
 
             for device_data in fresh_devices:
                 entity = self.factory.create_entity(device_data, self.config, room_map.get(device_data.get("roomId")))
                 if not entity:
                     continue
 
-                fresh_device_ids.add(entity.id)
+                fresh_entity_ids.add(entity.id)
                 if entity.id in current_entity_ids:
-                    # Update existing entity if needed (e.g., name change)
                     self.api.available_entities.update(entity)
                 else:
-                    # Add new entity
                     self.api.available_entities.add(entity)
                     _LOG.info(f"Discovered new entity: {entity.name} ({entity.id})")
 
-            # Remove entities that no longer exist
-            stale_entity_ids = current_entity_ids - fresh_device_ids
+            stale_entity_ids = current_entity_ids - fresh_entity_ids
             for entity_id in stale_entity_ids:
                 self.api.available_entities.remove(entity_id)
                 _LOG.info(f"Removed stale entity: {entity_id}")
@@ -279,6 +266,8 @@ class SmartThingsIntegration:
     async def _polling_loop(self):
         while True:
             try:
+                # Give the system a moment to connect before the first poll
+                await asyncio.sleep(5)
                 await self._poll_entities()
                 polling_interval = self.config.get("polling_interval", 30)
                 await asyncio.sleep(polling_interval)
@@ -287,11 +276,11 @@ class SmartThingsIntegration:
                 break
             except Exception as e:
                 _LOG.error(f"Error in polling loop: {e}", exc_info=True)
-                await asyncio.sleep(60) # Wait longer after an error
+                await asyncio.sleep(60)
     
     async def _poll_entities(self):
-        if not self.subscribed_entities:
-            _LOG.debug("No subscribed entities to poll.")
+        if not self.subscribed_entities or not self.client:
+            _LOG.debug("No subscribed entities to poll or client not ready.")
             return
 
         _LOG.debug(f"Polling status for {len(self.subscribed_entities)} entities...")
@@ -299,13 +288,13 @@ class SmartThingsIntegration:
         for entity_id in self.subscribed_entities:
             entity = self.api.configured_entities.get(entity_id)
             if entity:
-                device_id = entity.id[3:] # Remove "st_" prefix
+                device_id = entity.id[3:]
                 tasks.append(self._update_entity_status(entity, device_id))
         
         if tasks:
             await asyncio.gather(*tasks)
 
-    async def _update_entity_status(self, entity, device_id: str):
+    async def _update_entity_status(self, entity: Entity, device_id: str):
         try:
             async with self.client:
                 status = await self.client.get_device_status(device_id)
@@ -315,17 +304,23 @@ class SmartThingsIntegration:
         except Exception as e:
             _LOG.warning(f"Failed to poll entity {entity.id}: {e}")
 
-    async def _cleanup(self):
+    async def _cleanup(self, soft=False):
         if self.polling_task and not self.polling_task.done():
             self.polling_task.cancel()
             try:
                 await self.polling_task
             except asyncio.CancelledError:
                 pass
+            self.polling_task = None
         
         if self.client: 
             await self.client.close()
-            
+            self.client = None
+        
+        # On a soft cleanup (reconnect), don't clear subscribed entities
+        if not soft:
+            self.subscribed_entities.clear()
+
         _LOG.info("Integration cleanup completed")
 
 async def main():
@@ -333,7 +328,6 @@ async def main():
     api = IntegrationAPI(loop)
     integration = SmartThingsIntegration(api, loop)
 
-    # **FIX**: Pre-load entities from cache before starting the API connection
     await integration._load_entities_from_cache()
     
     await api.init("driver.json", integration.setup_handler)

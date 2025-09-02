@@ -33,8 +33,10 @@ class SmartThingsIntegration:
         
         self.entity_last_poll = {}
         self.subscribed_entities = set()
+        self.pending_subscriptions = set()  # NEW: Track pending subscriptions
         self.polling_active = False
-        self.devices_in_command = set()  # Track devices currently executing commands
+        self.devices_in_command = set()
+        self.initialization_complete = False  # NEW: Track initialization state
         
         self._register_event_handlers()
         
@@ -53,21 +55,42 @@ class SmartThingsIntegration:
 
         @self.api.listens_to(Events.SUBSCRIBE_ENTITIES)
         async def on_subscribe_entities(entity_ids: List[str]):
-            _LOG.info(f"Remote subscribed to {len(entity_ids)} entities. Starting polling...")
+            _LOG.info(f"Remote requested subscription to {len(entity_ids)} entities")
             
             if not self.client or not self.factory:
-                _LOG.error("Client or factory not available during subscription")
+                _LOG.warning("Subscription request received before initialization complete - storing for later")
+                # Store the subscription request for when initialization is complete
+                self.pending_subscriptions.update(eid for eid in entity_ids if eid.startswith("st_"))
                 return
             
-            self.subscribed_entities = {eid for eid in entity_ids if eid.startswith("st_")}
+            # Filter for SmartThings entities
+            st_entities = {eid for eid in entity_ids if eid.startswith("st_")}
             
-            await self._sync_initial_state_immediate(list(self.subscribed_entities))
-            await self._start_polling()
+            # Check which entities are actually available
+            available_entities = set()
+            unavailable_entities = set()
+            
+            for entity_id in st_entities:
+                if entity_id in [entity.id for entity in self.api.available_entities.entities]:
+                    available_entities.add(entity_id)
+                else:
+                    unavailable_entities.add(entity_id)
+            
+            if unavailable_entities:
+                _LOG.warning(f"Some entities not yet available: {unavailable_entities}")
+                # Store unavailable entities for retry after initialization
+                self.pending_subscriptions.update(unavailable_entities)
+            
+            if available_entities:
+                _LOG.info(f"Subscribing to {len(available_entities)} available entities")
+                self.subscribed_entities = available_entities
+                await self._sync_initial_state_immediate(list(available_entities))
+                await self._start_polling()
             
     async def setup_handler(self, msg: SetupDriver) -> Any:
         setup_result = await self.setup_flow.handle_setup_request(msg)
         if isinstance(setup_result, uc.SetupComplete):
-            _LOG.info("Setup complete. Initializing on next connect.")
+            _LOG.info("Setup complete. Will initialize on next connect.")
         return setup_result
     
     async def _initialize_integration(self):
@@ -88,12 +111,49 @@ class SmartThingsIntegration:
             
             await self._create_entities()
             
+            # Mark initialization as complete
+            self.initialization_complete = True
+            
             await self.api.set_device_state(DeviceStates.CONNECTED)
             _LOG.info("SmartThings integration initialized successfully")
+            
+            # Process any pending subscriptions now that entities are available
+            await self._process_pending_subscriptions()
             
         except Exception as e:
             _LOG.error(f"Failed to initialize integration: {e}", exc_info=True)
             await self.api.set_device_state(DeviceStates.ERROR)
+    
+    async def _process_pending_subscriptions(self):
+        """Process subscription requests that arrived before initialization was complete."""
+        if not self.pending_subscriptions:
+            return
+            
+        _LOG.info(f"Processing {len(self.pending_subscriptions)} pending subscriptions")
+        
+        # Check which pending entities are now available
+        available_entities = set()
+        still_unavailable = set()
+        
+        available_entity_ids = {entity.id for entity in self.api.available_entities.entities}
+        
+        for entity_id in self.pending_subscriptions:
+            if entity_id in available_entity_ids:
+                available_entities.add(entity_id)
+            else:
+                still_unavailable.add(entity_id)
+        
+        if still_unavailable:
+            _LOG.warning(f"Some entities still not available after initialization: {still_unavailable}")
+        
+        if available_entities:
+            _LOG.info(f"Starting subscription for {len(available_entities)} previously pending entities")
+            self.subscribed_entities.update(available_entities)
+            await self._sync_initial_state_immediate(list(available_entities))
+            await self._start_polling()
+        
+        # Clear processed subscriptions
+        self.pending_subscriptions.clear()
     
     async def _create_entities(self):
         if not self.client or not self.factory: 
@@ -130,9 +190,9 @@ class SmartThingsIntegration:
                             if cap_id:
                                 capabilities.add(cap_id)
                     
-                    _LOG.info(f"Processing device: {device_name}")
-                    _LOG.info(f"  - Device Type: {device_type}")
-                    _LOG.info(f"  - Capabilities ({len(capabilities)}): {list(capabilities)}")
+                    _LOG.debug(f"Processing device: {device_name}")
+                    _LOG.debug(f"  - Device Type: {device_type}")
+                    _LOG.debug(f"  - Capabilities ({len(capabilities)}): {list(capabilities)}")
                     
                     entity = self.factory.create_entity(device_data, self.config, room_names.get(device_data.get("roomId")))
                     if entity:
@@ -140,10 +200,9 @@ class SmartThingsIntegration:
                             created_count += 1
                             _LOG.info(f"✅ Successfully added entity: {entity.id} ({entity.name})")
                         else:
-                            _LOG.warning(f"❌ Failed to add entity to UC API: {entity.id}")
+                            _LOG.warning(f"⚠ Failed to add entity to UC API: {entity.id}")
                     else:
-                        _LOG.warning(f"⚠️ No entity created for device: {device_name}")
-                        _LOG.warning(f"    This device may not be supported yet or lacks required capabilities")
+                        _LOG.debug(f"No entity created for device: {device_name}")
                         
                 except Exception as e:
                     device_name = device_data.get("label", device_data.get("name", "Unknown"))
@@ -152,16 +211,14 @@ class SmartThingsIntegration:
             _LOG.info(f"Entity creation summary: {created_count} entities created from {len(devices_raw)} devices")
             
             if created_count == 0:
-                _LOG.error("❌ No entities were created! This indicates:")
-                _LOG.error("   - Devices may not be supported yet")
-                _LOG.error("   - Device capabilities don't match known patterns")
-                _LOG.error("   - Configuration may exclude all device types")
-                _LOG.error("   Please run the device analyzer script to get device details")
+                _LOG.warning("No entities were created! Check device support and configuration.")
             else:
                 _LOG.info(f"✅ Successfully created {created_count} entities")
 
         except Exception as e:
             _LOG.error(f"Failed to create entities: {e}", exc_info=True)
+
+    # ... rest of the methods remain the same ...
 
     async def _sync_initial_state_immediate(self, entity_ids: List[str]):
         _LOG.info(f"Syncing initial state for {len(entity_ids)} entities...")
@@ -396,6 +453,7 @@ class SmartThingsIntegration:
 
     async def _cleanup(self):
         self.polling_active = False
+        self.initialization_complete = False
         
         if self.status_update_task and not self.status_update_task.done():
             self.status_update_task.cancel()
@@ -409,6 +467,7 @@ class SmartThingsIntegration:
         
         self.entity_last_poll.clear()
         self.subscribed_entities.clear()
+        self.pending_subscriptions.clear()
         self.devices_in_command.clear()
             
         _LOG.info("Integration cleanup completed")

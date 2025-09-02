@@ -55,12 +55,25 @@ class SmartThingsIntegration:
             else:
                 _LOG.info("No configuration found - setting disconnected state")
                 await self.api.set_device_state(DeviceStates.DISCONNECTED)
-                
+
         @self.api.listens_to(Events.DISCONNECT)
         async def on_disconnect():
             await self._cleanup()
 
-        # NOTE: Removed SUBSCRIBE_ENTITIES handler - monitoring starts from on_connect instead
+        @self.api.listens_to(Events.SUBSCRIBE_ENTITIES)
+        async def on_subscribe_entities(entity_ids: List[str]):
+            _LOG.info(f"Remote requested subscription to {len(entity_ids)} entities")
+            
+            # Filter for SmartThings entities and store subscriptions
+            st_entities = {eid for eid in entity_ids if eid.startswith("st_")}
+            self.subscribed_entities = st_entities
+            
+            if st_entities and self.client and self.factory:
+                _LOG.info(f"Starting subscription for {len(st_entities)} entities")
+                await self._sync_initial_state_immediate(list(st_entities))
+                await self._start_monitoring_loop()
+            else:
+                _LOG.info(f"Subscription request stored - will process when initialization complete")
         
     async def _load_existing_configuration(self) -> bool:
         """Load existing configuration and create placeholder entities if found."""
@@ -196,25 +209,19 @@ class SmartThingsIntegration:
             _LOG.warning("Cannot start monitoring - client or factory not available")
             return
             
-        # Get currently subscribed entities from UC system
-        subscribed_entity_ids = set()
-        for entity in self.api.configured_entities.entities:
-            if entity.id.startswith("st_"):
-                subscribed_entity_ids.add(entity.id)
-        
-        if subscribed_entity_ids:
-            _LOG.info(f"Starting monitoring for {len(subscribed_entity_ids)} subscribed entities")
-            self.subscribed_entities = subscribed_entity_ids
-            
-            # Sync initial state immediately
-            await self._sync_initial_state_immediate(list(subscribed_entity_ids))
-            
-            # Start background polling
-            self.polling_active = True
-            self.status_update_task = self.loop.create_task(self._polling_loop())
-            _LOG.info("Background monitoring started")
-        else:
+        if not self.subscribed_entities:
             _LOG.info("No subscribed entities found - monitoring will start when entities are subscribed")
+            return
+
+        _LOG.info(f"Starting monitoring for {len(self.subscribed_entities)} subscribed entities")
+        
+        # Sync initial state immediately
+        await self._sync_initial_state_immediate(list(self.subscribed_entities))
+        
+        # Start background polling
+        self.polling_active = True
+        self.status_update_task = self.loop.create_task(self._polling_loop())
+        _LOG.info("Background monitoring started")
 
     async def _sync_initial_state_immediate(self, entity_ids: List[str]):
         """Sync initial state for specified entities."""

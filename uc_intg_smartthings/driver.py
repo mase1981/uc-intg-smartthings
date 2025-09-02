@@ -239,7 +239,6 @@ async def main():
             
             config = config_manager.load_config()
             if not client:
-                global client, factory
                 client = SmartThingsClient(config.get("access_token"))
                 factory = SmartThingsEntityFactory(client, api)
             

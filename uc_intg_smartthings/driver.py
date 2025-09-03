@@ -43,9 +43,31 @@ class SmartThingsIntegration:
         async def on_connect():
             _LOG.info("Connected to UC Remote")
             if self.config_manager.is_configured():
-                await self._initialize_integration()
+                # Check if we need to recreate entities (they're missing after reboot)
+                existing_entities = len(self.api.available_entities.get_all())
+                _LOG.info(f"Found {existing_entities} existing entities")
+                
+                if existing_entities == 0:
+                    _LOG.info("No entities found after reboot - recreating...")
+                    await self._initialize_integration()
+                else:
+                    _LOG.info("Entities exist - reconnecting clients only...")
+                    # Just reconnect without clearing entities - CRITICAL for reboot survival
+                    self.config = self.config_manager.load_config()
+                    access_token = self.config.get("access_token")
+                    
+                    if access_token:
+                        if not self.client:
+                            self.client = SmartThingsClient(access_token)
+                            self.factory = SmartThingsEntityFactory(self.client, self.api)
+                            self.factory.command_callback = self.track_device_command
+                        
+                        await self.api.set_device_state(DeviceStates.CONNECTED)
+                        await self._start_polling()
+                    else:
+                        _LOG.error("No access token found in configuration")
+                        await self.api.set_device_state(DeviceStates.ERROR)
             else:
-                # Using AWAITING_SETUP is more accurate here
                 await self.api.set_device_state(DeviceStates.AWAITING_SETUP)
 
         @self.api.listens_to(Events.DISCONNECT)

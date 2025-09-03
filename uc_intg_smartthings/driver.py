@@ -43,30 +43,10 @@ class SmartThingsIntegration:
         async def on_connect():
             _LOG.info("Connected to UC Remote")
             if self.config_manager.is_configured():
-                # Check if we need to recreate entities (they're missing after reboot)
-                existing_entities = len(self.api.available_entities.get_all())
-                _LOG.info(f"Found {existing_entities} existing entities")
-                
-                if existing_entities == 0:
-                    _LOG.info("No entities found after reboot - recreating...")
-                    await self._initialize_integration()
-                else:
-                    _LOG.info("Entities exist - reconnecting clients only...")
-                    # Just reconnect without clearing entities - CRITICAL for reboot survival
-                    self.config = self.config_manager.load_config()
-                    access_token = self.config.get("access_token")
-                    
-                    if access_token:
-                        if not self.client:
-                            self.client = SmartThingsClient(access_token)
-                            self.factory = SmartThingsEntityFactory(self.client, self.api)
-                            self.factory.command_callback = self.track_device_command
-                        
-                        await self.api.set_device_state(DeviceStates.CONNECTED)
-                        await self._start_polling()
-                    else:
-                        _LOG.error("No access token found in configuration")
-                        await self.api.set_device_state(DeviceStates.ERROR)
+                # CRITICAL FIX: Always fully initialize after reboot
+                # Don't check for existing entities - they may be stale
+                _LOG.info("Configuration found - initializing integration...")
+                await self._initialize_integration()
             else:
                 await self.api.set_device_state(DeviceStates.AWAITING_SETUP)
 
@@ -85,24 +65,16 @@ class SmartThingsIntegration:
             self.subscribed_entities = {eid for eid in entity_ids if eid.startswith("st_")}
 
             await self._sync_initial_state_immediate(list(self.subscribed_entities))
-            
-            # ## CHANGE 1 of 3 ##
-            # The polling loop is no longer started here. This was unreliable.
-            # It's now started from a stable point after initialization.
-            # await self._start_polling()
 
     async def setup_handler(self, msg: SetupDriver) -> Any:
         setup_result = await self.setup_flow.handle_setup_request(msg)
         if isinstance(setup_result, uc.SetupComplete):
-            # ## CHANGE 2 of 3 ##
-            # Initialize immediately after setup instead of waiting for a reconnect.
-            # This makes the user experience much smoother.
             _LOG.info("Setup complete. Initializing integration immediately.")
             self.loop.create_task(self._initialize_integration())
         return setup_result
 
     async def _initialize_integration(self):
-        await self._cleanup()
+        # CRITICAL: Don't cleanup on reboot - this was breaking entity persistence
         try:
             await self.api.set_device_state(DeviceStates.CONNECTING)
             self.config = self.config_manager.load_config()
@@ -111,19 +83,19 @@ class SmartThingsIntegration:
                 _LOG.error("No access token found in configuration")
                 return
 
-            self.client = SmartThingsClient(access_token)
-            self.factory = SmartThingsEntityFactory(self.client, self.api)
+            # Create new client and factory
+            if not self.client:
+                self.client = SmartThingsClient(access_token)
+            if not self.factory:
+                self.factory = SmartThingsEntityFactory(self.client, self.api)
+                self.factory.command_callback = self.track_device_command
 
-            self.factory.command_callback = self.track_device_command
-
+            # CRITICAL FIX: Always recreate entities on connect to ensure they're properly registered
             await self._create_entities()
 
             await self.api.set_device_state(DeviceStates.CONNECTED)
             _LOG.info("SmartThings integration initialized successfully")
 
-            # ## CHANGE 3 of 3 ##
-            # The polling loop is now started here. This is the most reliable
-            # place, as it runs only after the client is ready and entities exist.
             await self._start_polling()
 
         except Exception as e:
@@ -146,6 +118,8 @@ class SmartThingsIntegration:
                 rooms = await self.client.get_rooms(location_id)
 
             room_names = {room["roomId"]: room["name"] for room in rooms}
+            
+            # CRITICAL FIX: Clear and recreate all entities to ensure proper registration
             self.api.available_entities.clear()
             created_count = 0
 
@@ -169,9 +143,21 @@ class SmartThingsIntegration:
 
                     entity = self.factory.create_entity(device_data, self.config, room_names.get(device_data.get("roomId")))
                     if entity:
+                        # CRITICAL FIX: Ensure entity is properly added with all attributes
                         if self.api.available_entities.add(entity):
                             created_count += 1
                             _LOG.info(f"✅ Successfully added entity: {entity.id} ({entity.name})")
+                            
+                            # CRITICAL FIX: Immediately sync initial state to populate attributes
+                            try:
+                                async with self.client:
+                                    device_id = entity.id[3:]  # Remove "st_" prefix
+                                    device_status = await self.client.get_device_status(device_id)
+                                    if device_status:
+                                        self.factory.update_entity_attributes(entity, device_status)
+                                        _LOG.debug(f"Initial state set for {entity.name}: {entity.attributes}")
+                            except Exception as e:
+                                _LOG.warning(f"Failed to set initial state for {entity.name}: {e}")
                         else:
                             _LOG.warning(f"❌ Failed to add entity to UC API: {entity.id}")
                     else:

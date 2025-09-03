@@ -47,8 +47,6 @@ class SmartThingsIntegration:
         async def on_connect():
             _LOG.info("UC Remote connected - checking if entities are ready")
             
-            # CRITICAL FIX: Don't initialize during CONNECT if already configured
-            # Instead, ensure entities are ready BEFORE UC Remote connects
             if self.config_manager.is_configured():
                 if not self.entities_ready:
                     _LOG.info("Entities not ready yet - initializing now")
@@ -86,8 +84,7 @@ class SmartThingsIntegration:
         setup_result = await self.setup_flow.handle_setup_request(msg)
         if isinstance(setup_result, uc.SetupComplete):
             _LOG.info("Setup complete. Pre-initializing entities before UC Remote connects")
-            # CRITICAL FIX: Initialize entities immediately after setup
-            # This ensures entities exist BEFORE UC Remote tries to subscribe
+
             await self._initialize_integration()
         return setup_result
 
@@ -428,11 +425,8 @@ async def main():
     api = IntegrationAPI(loop)
     integration = SmartThingsIntegration(api, loop)
     
-    # CRITICAL FIX: Pre-initialize entities if already configured
-    # This ensures entities exist BEFORE UC Remote tries to connect/subscribe
     if integration.config_manager.is_configured():
         _LOG.info("Integration is configured - pre-initializing entities")
-        # Don't await here - let it initialize in background
         loop.create_task(integration._initialize_integration())
     
     await api.init("driver.json", integration.setup_handler)

@@ -3,7 +3,7 @@
 Control your SmartThings devices seamlessly with your Unfolded Circle Remote 2 or Remote 3.
 
 ![SmartThings](https://img.shields.io/badge/SmartThings-Cloud%20API-blue)
-![Version](https://img.shields.io/badge/version-1.0.0-green)
+![Version](https://img.shields.io/badge/version-1.1.11-green)
 ![License](https://img.shields.io/badge/license-MPL--2.0-orange)
 [![Buy Me A Coffee](https://img.shields.io/badge/buy%20me%20a%20coffee-donate-yellow.svg)](https://buymeacoffee.com/meirmiyara)
 [![PayPal](https://img.shields.io/badge/PayPal-donate-blue.svg)](https://paypal.me/mmiyara)
@@ -14,7 +14,7 @@ This integration provides comprehensive control of your SmartThings ecosystem di
 
 ## Important
 
-Due to the way Smartthings work, to make this integration free/Open Source without the mandatory requirement for a public facing SmartApp (webhooks) i had to use a Pull Method, the downside is that there will be a delay between state change and what the remote will reflect on the screen - This is a trade off to get this integration to work. At some point in the future when UC Team make Smartthings integration baked into the remote firmware, they will most likely to host and maintain their own SmartApp (webhooks) with WWST (Work With Smartthings) Certification. 
+Due to the way Smartthings work, to make this integration Free/Open Source without the mandatory requirement for a hosted public facing SmartApp (webhooks) i had to use a Pull Method, the downside is that there will be a delay between state change and what the remote will reflect on the screen - This is a trade off to get this integration to work. At some point in the future when UC Team make Smartthings integration baked into the remote firmware, they will most likely to host and maintain their own SmartApp (webhooks) with WWST (Work With Smartthings) Certification. 
 ### 🏠 Supported Device Types
 
 The integration automatically detects and categorizes your configured SmartThings devices

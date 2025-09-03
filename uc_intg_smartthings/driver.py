@@ -95,7 +95,15 @@ class SmartThingsIntegration:
             await self.api.set_device_state(DeviceStates.ERROR)
 
     async def _ensure_entities_in_available_store(self):
-
+        """
+        THE CRITICAL FIX: Ensure entities are always in available_entities store
+        
+        This is the root cause of the persistence issue:
+        - UC Remote stores entity subscriptions across reboots
+        - After reboot, Remote tries to re-subscribe to the same entities
+        - But if available_entities is empty, subscription fails
+        - Entities appear as "unavailable" even though they exist in the Remote's config
+        """
         try:
             current_available = len(self.api.available_entities.get_all())
             _LOG.info(f"Current available entities: {current_available}")
@@ -157,7 +165,16 @@ class SmartThingsIntegration:
             _LOG.error(f"Failed to create and populate available entities: {e}", exc_info=True)
 
     async def _sync_initial_state_immediate(self, entity_ids: List[str]):
-        _LOG.info(f"Syncing initial state for {len(entity_ids)} entities...")
+        _LOG.info(f"=== INITIAL STATE SYNC: Processing {len(entity_ids)} entities ===")
+
+        # CRITICAL DEBUG: Check configured entities before sync
+        configured_entities = list(self.api.configured_entities._storage.keys())
+        _LOG.info(f"Configured entities available for sync: {len(configured_entities)}")
+        
+        if not configured_entities:
+            _LOG.error("❌ CRITICAL: No configured entities to sync! This is why entities appear unavailable.")
+            _LOG.error("The subscription process failed to move entities from available to configured.")
+            return
 
         import time
         start_time = time.time()
@@ -173,6 +190,8 @@ class SmartThingsIntegration:
                 if entity:
                     device_id = entity_id[3:]
                     tasks.append(self._sync_single_entity(entity, device_id))
+                else:
+                    _LOG.warning(f"Entity {entity_id} not found in configured_entities during sync")
 
             if tasks:
                 results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -185,6 +204,15 @@ class SmartThingsIntegration:
 
         sync_time = time.time() - start_time
         _LOG.info(f"Initial state synced for {synced_count}/{len(entity_ids)} entities in {sync_time:.1f}s")
+        
+        # CRITICAL DEBUG: Check entity states after sync
+        await asyncio.sleep(0.5)
+        entity_states = await self.api.configured_entities.get_states()
+        _LOG.info(f"=== POST-SYNC STATUS: {len(entity_states)} entities have states ===")
+        if len(entity_states) == 0:
+            _LOG.error("❌ CRITICAL: No entity states available! This is why UC Remote shows entities as unavailable.")
+        else:
+            _LOG.info(f"✅ Entity states ready: {[state['entity_id'] for state in entity_states[:3]]}..." + (" and more" if len(entity_states) > 3 else ""))
 
     async def _sync_single_entity(self, entity, device_id: str) -> bool:
         try:

@@ -35,6 +35,10 @@ class SmartThingsIntegration:
         self.subscribed_entities = set()
         self.polling_active = False
         self.devices_in_command = set()
+        
+        # CRITICAL FIX: Track entity creation state
+        self.entities_created = False
+        self.entity_registry = {}  # Store entity definitions for re-creation
 
         self._register_event_handlers()
 
@@ -60,7 +64,30 @@ class SmartThingsIntegration:
                 return
 
             self.subscribed_entities = {eid for eid in entity_ids if eid.startswith("st_")}
+            
+            # CRITICAL FIX: Check if entities are actually available
+            available_entities = [eid for eid in entity_ids if self.api.configured_entities.get(eid)]
+            if len(available_entities) < len(entity_ids):
+                missing_entities = set(entity_ids) - set(available_entities)
+                _LOG.warning(f"Missing entities detected: {missing_entities}")
+                _LOG.info("Attempting to restore missing entities...")
+                await self._restore_missing_entities(missing_entities)
+            
             await self._sync_initial_state_immediate(list(self.subscribed_entities))
+
+        # CRITICAL FIX: Add new event handler for entity state requests
+        @self.api.listens_to(Events.ENTITY_COMMAND)
+        async def on_entity_command(entity_id: str, cmd_id: str, params: Dict[str, Any] = None):
+            """Handle entity commands and ensure entity is available"""
+            entity = self.api.configured_entities.get(entity_id)
+            if not entity and entity_id.startswith("st_"):
+                _LOG.warning(f"Entity {entity_id} not found, attempting to restore...")
+                await self._restore_missing_entities([entity_id])
+                entity = self.api.configured_entities.get(entity_id)
+            
+            if not entity:
+                _LOG.error(f"Could not restore entity {entity_id}")
+                return False
 
     async def setup_handler(self, msg: SetupDriver) -> Any:
         setup_result = await self.setup_flow.handle_setup_request(msg)
@@ -82,15 +109,8 @@ class SmartThingsIntegration:
             self.factory = SmartThingsEntityFactory(self.client, self.api)
             self.factory.command_callback = self.track_device_command
 
-            # CRITICAL FIX: Create entities only if none exist
-            existing_count = len(self.api.available_entities.get_all())
-            _LOG.info(f"Found {existing_count} existing entities")
-            
-            if existing_count == 0:
-                _LOG.info("No entities found - creating entities")
-                await self._create_entities()
-            else:
-                _LOG.info(f"Found {existing_count} existing entities - skipping entity creation")
+            # CRITICAL FIX: Always ensure entities are properly registered
+            await self._ensure_entities_available()
 
             await self.api.set_device_state(DeviceStates.CONNECTED)
             _LOG.info("SmartThings integration initialized successfully")
@@ -99,6 +119,93 @@ class SmartThingsIntegration:
         except Exception as e:
             _LOG.error(f"Failed to initialize integration: {e}", exc_info=True)
             await self.api.set_device_state(DeviceStates.ERROR)
+
+    async def _ensure_entities_available(self):
+        try:
+            # Check if we have stored entity registry from previous runs
+            if self.entity_registry and not self.entities_created:
+                _LOG.info(f"Restoring {len(self.entity_registry)} entities from registry")
+                await self._restore_entities_from_registry()
+                return
+
+            # If no stored entities, create them fresh
+            current_entities = len(self.api.available_entities.get_all())
+            _LOG.info(f"Current available entities: {current_entities}")
+            
+            if current_entities == 0 or not self.entities_created:
+                _LOG.info("Creating/recreating entities")
+                await self._create_entities()
+            else:
+                _LOG.info("Entities already exist, validating availability")
+                await self._validate_entity_availability()
+                
+        except Exception as e:
+            _LOG.error(f"Failed to ensure entities available: {e}", exc_info=True)
+
+    async def _validate_entity_availability(self):
+        all_entities = self.api.available_entities.get_all()
+        configured_entities = []
+        
+        for entity in all_entities:
+            configured_entity = self.api.configured_entities.get(entity.id)
+            if configured_entity:
+                configured_entities.append(entity.id)
+            else:
+                _LOG.warning(f"Entity {entity.id} is available but not configured")
+        
+        _LOG.info(f"Validated {len(configured_entities)} configured entities")
+        
+        if len(configured_entities) == 0:
+            _LOG.error("No configured entities found - recreating all entities")
+            await self._create_entities()
+
+    async def _restore_entities_from_registry(self):
+        restored_count = 0
+        
+        for entity_id, entity_data in self.entity_registry.items():
+            try:
+                # Recreate entity from stored data
+                entity = self.factory.create_entity(
+                    entity_data['device_data'], 
+                    self.config, 
+                    entity_data.get('area')
+                )
+                
+                if entity:
+                    if self.api.available_entities.add(entity):
+                        restored_count += 1
+                        _LOG.debug(f"Restored entity: {entity.id}")
+                    else:
+                        _LOG.warning(f"Failed to restore entity: {entity_id}")
+                        
+            except Exception as e:
+                _LOG.error(f"Failed to restore entity {entity_id}: {e}")
+        
+        if restored_count > 0:
+            self.entities_created = True
+            _LOG.info(f"Restored {restored_count} entities from registry")
+        else:
+            _LOG.warning("Failed to restore entities from registry, creating fresh")
+            await self._create_entities()
+
+    async def _restore_missing_entities(self, missing_entity_ids: List[str]):
+        for entity_id in missing_entity_ids:
+            if entity_id in self.entity_registry:
+                entity_data = self.entity_registry[entity_id]
+                try:
+                    entity = self.factory.create_entity(
+                        entity_data['device_data'], 
+                        self.config, 
+                        entity_data.get('area')
+                    )
+                    
+                    if entity and self.api.available_entities.add(entity):
+                        _LOG.info(f"Restored missing entity: {entity_id}")
+                    else:
+                        _LOG.error(f"Failed to restore missing entity: {entity_id}")
+                        
+                except Exception as e:
+                    _LOG.error(f"Error restoring missing entity {entity_id}: {e}")
 
     async def _create_entities(self):
         if not self.client or not self.factory:
@@ -120,13 +227,26 @@ class SmartThingsIntegration:
 
             _LOG.info(f"Processing {len(devices_raw)} devices from SmartThings...")
 
+            self.api.available_entities.clear()
+            self.entity_registry.clear()
+
             for device_data in devices_raw:
                 try:
                     device_name = device_data.get("label") or device_data.get("name", "Unknown")
-                    entity = self.factory.create_entity(device_data, self.config, room_names.get(device_data.get("roomId")))
+                    area = room_names.get(device_data.get("roomId"))
+                    
+                    entity = self.factory.create_entity(device_data, self.config, area)
                     if entity:
                         if self.api.available_entities.add(entity):
                             created_count += 1
+                            
+                            self.entity_registry[entity.id] = {
+                                'device_data': device_data,
+                                'area': area,
+                                'entity_type': getattr(entity, 'entity_type', None),
+                                'created_at': asyncio.get_event_loop().time()
+                            }
+                            
                             _LOG.info(f"✅ Successfully added entity: {entity.id} ({entity.name})")
                         else:
                             _LOG.warning(f"❌ Failed to add entity to UC API: {entity.id}")
@@ -137,7 +257,9 @@ class SmartThingsIntegration:
                     device_name = device_data.get("label", device_data.get("name", "Unknown"))
                     _LOG.error(f"Error creating entity for device {device_name}: {e}", exc_info=True)
 
+            self.entities_created = True
             _LOG.info(f"Entity creation summary: {created_count} entities created from {len(devices_raw)} devices")
+            _LOG.info(f"Entity registry contains {len(self.entity_registry)} entries")
 
         except Exception as e:
             _LOG.error(f"Failed to create entities: {e}", exc_info=True)
@@ -245,6 +367,12 @@ class SmartThingsIntegration:
         for entity_id in self.subscribed_entities:
             entity = self.api.configured_entities.get(entity_id)
             if not entity:
+                _LOG.warning(f"Entity {entity_id} missing during polling - attempting restore")
+                await self._restore_missing_entities([entity_id])
+                entity = self.api.configured_entities.get(entity_id)
+                
+            if not entity:
+                _LOG.error(f"Could not restore entity {entity_id} during polling")
                 continue
 
             device_id = entity_id[3:]
@@ -364,6 +492,7 @@ class SmartThingsIntegration:
         _LOG.debug(f"Tracking command for device {device_id}")
 
     async def _cleanup(self):
+        """CRITICAL FIX: Don't clear entity registry during cleanup"""
         self.polling_active = False
 
         if self.status_update_task and not self.status_update_task.done():
@@ -379,7 +508,7 @@ class SmartThingsIntegration:
         self.entity_last_poll.clear()
         self.subscribed_entities.clear()
         self.devices_in_command.clear()
-
+        
         _LOG.info("Integration cleanup completed")
 
 async def main():

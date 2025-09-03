@@ -35,6 +35,7 @@ class SmartThingsIntegration:
         self.subscribed_entities = set()
         self.polling_active = False
         self.devices_in_command = set()  # Track devices currently executing commands
+        self._entities_created = False  # Track if entities have been created
 
         self._register_event_handlers()
 
@@ -43,9 +44,6 @@ class SmartThingsIntegration:
         async def on_connect():
             _LOG.info("Connected to UC Remote")
             if self.config_manager.is_configured():
-                # CRITICAL FIX: Always fully initialize after reboot
-                # Don't check for existing entities - they may be stale
-                _LOG.info("Configuration found - initializing integration...")
                 await self._initialize_integration()
             else:
                 await self.api.set_device_state(DeviceStates.AWAITING_SETUP)
@@ -70,28 +68,39 @@ class SmartThingsIntegration:
         setup_result = await self.setup_flow.handle_setup_request(msg)
         if isinstance(setup_result, uc.SetupComplete):
             _LOG.info("Setup complete. Initializing integration immediately.")
+            self._entities_created = False  # Reset flag to force entity creation
             self.loop.create_task(self._initialize_integration())
         return setup_result
 
     async def _initialize_integration(self):
-        # CRITICAL: Don't cleanup on reboot - this was breaking entity persistence
         try:
             await self.api.set_device_state(DeviceStates.CONNECTING)
             self.config = self.config_manager.load_config()
             access_token = self.config.get("access_token")
             if not access_token:
                 _LOG.error("No access token found in configuration")
+                await self.api.set_device_state(DeviceStates.ERROR)
                 return
 
-            # Create new client and factory
-            if not self.client:
-                self.client = SmartThingsClient(access_token)
+            # Create/recreate client and factory
+            if self.client:
+                await self.client.close()
+            self.client = SmartThingsClient(access_token)
+            
             if not self.factory:
                 self.factory = SmartThingsEntityFactory(self.client, self.api)
                 self.factory.command_callback = self.track_device_command
 
-            # CRITICAL FIX: Always recreate entities on connect to ensure they're properly registered
-            await self._create_entities()
+            # CRITICAL FIX: Only create entities if not already created
+            existing_entities = len(self.api.available_entities.get_all())
+            _LOG.info(f"Found {existing_entities} existing entities")
+            
+            if not self._entities_created and existing_entities == 0:
+                _LOG.info("Creating entities for first time or after setup...")
+                await self._create_entities()
+                self._entities_created = True
+            else:
+                _LOG.info("Entities already exist - skipping creation, connecting clients only")
 
             await self.api.set_device_state(DeviceStates.CONNECTED)
             _LOG.info("SmartThings integration initialized successfully")
@@ -118,9 +127,6 @@ class SmartThingsIntegration:
                 rooms = await self.client.get_rooms(location_id)
 
             room_names = {room["roomId"]: room["name"] for room in rooms}
-            
-            # CRITICAL FIX: Clear and recreate all entities to ensure proper registration
-            self.api.available_entities.clear()
             created_count = 0
 
             _LOG.info(f"Processing {len(devices_raw)} devices from SmartThings...")
@@ -137,47 +143,25 @@ class SmartThingsIntegration:
                             if cap_id:
                                 capabilities.add(cap_id)
 
-                    _LOG.info(f"Processing device: {device_name}")
-                    _LOG.info(f"  - Device Type: {device_type}")
-                    _LOG.info(f"  - Capabilities ({len(capabilities)}): {list(capabilities)}")
+                    _LOG.debug(f"Processing device: {device_name}")
+                    _LOG.debug(f"  - Device Type: {device_type}")
+                    _LOG.debug(f"  - Capabilities ({len(capabilities)}): {list(capabilities)}")
 
                     entity = self.factory.create_entity(device_data, self.config, room_names.get(device_data.get("roomId")))
                     if entity:
-                        # CRITICAL FIX: Ensure entity is properly added with all attributes
                         if self.api.available_entities.add(entity):
                             created_count += 1
                             _LOG.info(f"✅ Successfully added entity: {entity.id} ({entity.name})")
-                            
-                            # CRITICAL FIX: Immediately sync initial state to populate attributes
-                            try:
-                                async with self.client:
-                                    device_id = entity.id[3:]  # Remove "st_" prefix
-                                    device_status = await self.client.get_device_status(device_id)
-                                    if device_status:
-                                        self.factory.update_entity_attributes(entity, device_status)
-                                        _LOG.debug(f"Initial state set for {entity.name}: {entity.attributes}")
-                            except Exception as e:
-                                _LOG.warning(f"Failed to set initial state for {entity.name}: {e}")
                         else:
-                            _LOG.warning(f"❌ Failed to add entity to UC API: {entity.id}")
+                            _LOG.debug(f"Entity {entity.id} already exists - skipping")
                     else:
-                        _LOG.warning(f"⚠️  No entity created for device: {device_name}")
-                        _LOG.warning(f"    This device may not be supported yet or lacks required capabilities")
+                        _LOG.debug(f"No entity created for device: {device_name}")
 
                 except Exception as e:
                     device_name = device_data.get("label", device_data.get("name", "Unknown"))
                     _LOG.error(f"Error creating entity for device {device_name}: {e}", exc_info=True)
 
             _LOG.info(f"Entity creation summary: {created_count} entities created from {len(devices_raw)} devices")
-
-            if created_count == 0:
-                _LOG.error("❌ No entities were created! This indicates:")
-                _LOG.error("   - Devices may not be supported yet")
-                _LOG.error("   - Device capabilities don't match known patterns")
-                _LOG.error("   - Configuration may exclude all device types")
-                _LOG.error("   Please run the device analyzer script to get device details")
-            else:
-                _LOG.info(f"✅ Successfully created {created_count} entities")
 
         except Exception as e:
             _LOG.error(f"Failed to create entities: {e}", exc_info=True)

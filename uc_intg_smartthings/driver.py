@@ -35,15 +35,28 @@ class SmartThingsIntegration:
         self.subscribed_entities = set()
         self.polling_active = False
         self.devices_in_command = set()
+        
+        # CRITICAL FIX: Track initialization state
+        self.entities_ready = False
+        self.initialization_lock = asyncio.Lock()
 
         self._register_event_handlers()
 
     def _register_event_handlers(self):
         @self.api.listens_to(Events.CONNECT)
         async def on_connect():
-            _LOG.info("Connected to UC Remote")
+            _LOG.info("UC Remote connected - checking if entities are ready")
+            
+            # CRITICAL FIX: Don't initialize during CONNECT if already configured
+            # Instead, ensure entities are ready BEFORE UC Remote connects
             if self.config_manager.is_configured():
-                await self._initialize_integration()
+                if not self.entities_ready:
+                    _LOG.info("Entities not ready yet - initializing now")
+                    await self._initialize_integration()
+                else:
+                    _LOG.info("Entities already ready - setting state to CONNECTED")
+                    await self.api.set_device_state(DeviceStates.CONNECTED)
+                    await self._start_polling()
             else:
                 await self.api.set_device_state(DeviceStates.AWAITING_SETUP)
 
@@ -53,187 +66,185 @@ class SmartThingsIntegration:
 
         @self.api.listens_to(Events.SUBSCRIBE_ENTITIES)
         async def on_subscribe_entities(entity_ids: List[str]):
-            _LOG.info(f"Remote subscribed to {len(entity_ids)} entities. Starting polling...")
-
+            _LOG.info(f"Subscription request for {len(entity_ids)} entities")
+            
+            if not self.entities_ready:
+                _LOG.error("CRITICAL: Subscription attempted before entities are ready!")
+                # Try to initialize immediately
+                await self._initialize_integration()
+                
             if not self.client or not self.factory:
                 _LOG.error("Client or factory not available during subscription")
                 return
 
             self.subscribed_entities = {eid for eid in entity_ids if eid.startswith("st_")}
+            _LOG.info(f"Tracking {len(self.subscribed_entities)} subscribed entities")
+            
             await self._sync_initial_state_immediate(list(self.subscribed_entities))
 
     async def setup_handler(self, msg: SetupDriver) -> Any:
         setup_result = await self.setup_flow.handle_setup_request(msg)
         if isinstance(setup_result, uc.SetupComplete):
-            _LOG.info("Setup complete. Initializing integration immediately.")
-            self.loop.create_task(self._initialize_integration())
+            _LOG.info("Setup complete. Pre-initializing entities before UC Remote connects")
+            # CRITICAL FIX: Initialize entities immediately after setup
+            # This ensures entities exist BEFORE UC Remote tries to subscribe
+            await self._initialize_integration()
         return setup_result
 
     async def _initialize_integration(self):
-        try:
-            await self.api.set_device_state(DeviceStates.CONNECTING)
-            self.config = self.config_manager.load_config()
-            access_token = self.config.get("access_token")
-            if not access_token:
-                _LOG.error("No access token found in configuration")
+        """Initialize integration and ensure entities are ready"""
+        async with self.initialization_lock:
+            if self.entities_ready:
+                _LOG.debug("Entities already initialized")
                 return
+                
+            try:
+                await self.api.set_device_state(DeviceStates.CONNECTING)
+                _LOG.info("=== STARTING INTEGRATION INITIALIZATION ===")
+                
+                # Load config and create client
+                self.config = self.config_manager.load_config()
+                access_token = self.config.get("access_token")
+                if not access_token:
+                    _LOG.error("No access token found in configuration")
+                    await self.api.set_device_state(DeviceStates.ERROR)
+                    return
 
-            self.client = SmartThingsClient(access_token)
-            self.factory = SmartThingsEntityFactory(self.client, self.api)
-            self.factory.command_callback = self.track_device_command
+                self.client = SmartThingsClient(access_token)
+                self.factory = SmartThingsEntityFactory(self.client, self.api)
+                self.factory.command_callback = self.track_device_command
 
-            # THE CRITICAL FIX: Always ensure entities are in available_entities
-            # The UC Remote needs entities to be in available_entities to subscribe to them
-            await self._ensure_entities_in_available_store()
+                # CRITICAL FIX: Create ALL entities FIRST, before setting CONNECTED
+                await self._create_all_entities()
+                
+                # Mark entities as ready BEFORE setting CONNECTED state
+                self.entities_ready = True
+                _LOG.info("=== ENTITIES READY - UC Remote can now safely connect ===")
+                
+                await self.api.set_device_state(DeviceStates.CONNECTED)
+                _LOG.info("SmartThings integration initialized successfully")
 
-            await self.api.set_device_state(DeviceStates.CONNECTED)
-            _LOG.info("SmartThings integration initialized successfully")
-            await self._start_polling()
+            except Exception as e:
+                _LOG.error(f"Failed to initialize integration: {e}", exc_info=True)
+                await self.api.set_device_state(DeviceStates.ERROR)
 
-        except Exception as e:
-            _LOG.error(f"Failed to initialize integration: {e}", exc_info=True)
-            await self.api.set_device_state(DeviceStates.ERROR)
-
-    async def _ensure_entities_in_available_store(self):
-        """
-        THE CRITICAL FIX: Ensure entities are always in available_entities store
-        
-        This is the root cause of the persistence issue:
-        - UC Remote stores entity subscriptions across reboots
-        - After reboot, Remote tries to re-subscribe to the same entities
-        - But if available_entities is empty, subscription fails
-        - Entities appear as "unavailable" even though they exist in the Remote's config
-        """
-        try:
-            current_available = len(self.api.available_entities.get_all())
-            _LOG.info(f"Current available entities: {current_available}")
-            
-            if current_available == 0:
-                _LOG.info("No available entities found - creating entities")
-                await self._create_and_populate_available_entities()
-            else:
-                _LOG.info(f"Found {current_available} available entities - entities already populated")
-
-        except Exception as e:
-            _LOG.error(f"Failed to ensure entities in available store: {e}", exc_info=True)
-
-    async def _create_and_populate_available_entities(self):
-        """Create entities and add them to the available_entities store"""
-        if not self.client or not self.factory:
-            _LOG.error("Client or factory not available for entity creation")
-            return
-
+    async def _create_all_entities(self):
+        """Create all entities and add them to available_entities"""
         try:
             location_id = self.config.get("location_id")
             if not location_id:
                 _LOG.error("No location_id found in configuration")
                 return
 
+            # Clear any existing entities to prevent duplicates
+            self.api.available_entities.clear()
+            _LOG.info("Cleared existing available entities")
+
+            # Fetch devices and rooms
             async with self.client:
                 devices_raw = await self.client.get_devices(location_id)
                 rooms = await self.client.get_rooms(location_id)
 
             room_names = {room["roomId"]: room["name"] for room in rooms}
             created_count = 0
+            total_devices = len(devices_raw)
 
-            _LOG.info(f"Processing {len(devices_raw)} devices from SmartThings...")
+            _LOG.info(f"Processing {total_devices} devices from SmartThings...")
 
-            for device_data in devices_raw:
+            # Create all entities in one go
+            for i, device_data in enumerate(devices_raw, 1):
                 try:
                     device_name = device_data.get("label") or device_data.get("name", "Unknown")
                     area = room_names.get(device_data.get("roomId"))
                     
                     entity = self.factory.create_entity(device_data, self.config, area)
                     if entity:
-                        # THE KEY FIX: Add to available_entities (not configured_entities)
-                        # The UC Remote will move entities from available to configured during subscription
                         if self.api.available_entities.add(entity):
                             created_count += 1
-                            _LOG.info(f"✅ Added to available_entities: {entity.id} ({entity.name})")
+                            _LOG.debug(f"[{i}/{total_devices}] Created entity: {entity.id} ({device_name})")
                         else:
-                            _LOG.warning(f"❌ Failed to add to available_entities: {entity.id}")
-                    else:
-                        _LOG.debug(f"No entity created for device: {device_name}")
+                            _LOG.warning(f"Failed to add entity {entity.id} to available_entities")
 
                 except Exception as e:
                     device_name = device_data.get("label", device_data.get("name", "Unknown"))
-                    _LOG.error(f"Error creating entity for device {device_name}: {e}", exc_info=True)
+                    _LOG.error(f"Error creating entity for device {device_name}: {e}")
 
-            _LOG.info(f"Entity creation summary: {created_count} entities added to available_entities")
+            _LOG.info(f"=== ENTITY CREATION COMPLETE: {created_count}/{total_devices} entities ready ===")
+            
+            # Verify entities are actually available
+            available_count = len(self.api.available_entities.get_all())
+            _LOG.info(f"Verification: {available_count} entities in available_entities store")
+            
+            if available_count != created_count:
+                _LOG.error(f"MISMATCH: Created {created_count} but only {available_count} in store!")
+            
+            return created_count > 0
 
         except Exception as e:
-            _LOG.error(f"Failed to create and populate available entities: {e}", exc_info=True)
+            _LOG.error(f"Failed to create entities: {e}", exc_info=True)
+            return False
 
     async def _sync_initial_state_immediate(self, entity_ids: List[str]):
-        _LOG.info(f"=== INITIAL STATE SYNC: Processing {len(entity_ids)} entities ===")
+        _LOG.info(f"Starting initial state sync for {len(entity_ids)} entities")
 
-        # CRITICAL DEBUG: Check configured entities before sync
-        configured_entities = list(self.api.configured_entities._storage.keys())
-        _LOG.info(f"Configured entities available for sync: {len(configured_entities)}")
+        # Wait a moment for entities to settle in configured_entities
+        await asyncio.sleep(0.5)
         
-        if not configured_entities:
-            _LOG.error("❌ CRITICAL: No configured entities to sync! This is why entities appear unavailable.")
-            _LOG.error("The subscription process failed to move entities from available to configured.")
+        configured_entities = list(self.api.configured_entities._storage.keys())
+        _LOG.info(f"Configured entities available: {len(configured_entities)}")
+
+        if len(configured_entities) == 0:
+            _LOG.error("No configured entities found - subscription likely failed")
             return
 
         import time
         start_time = time.time()
         synced_count = 0
 
-        batch_size = 6
+        # Sync in smaller batches to be gentle on the API
+        batch_size = 5
         for i in range(0, len(entity_ids), batch_size):
             batch = entity_ids[i:i + batch_size]
+            batch_results = await asyncio.gather(
+                *[self._sync_single_entity_safe(entity_id) for entity_id in batch],
+                return_exceptions=True
+            )
+            
+            for result in batch_results:
+                if result is True:
+                    synced_count += 1
 
-            tasks = []
-            for entity_id in batch:
-                entity = self.api.configured_entities.get(entity_id)
-                if entity:
-                    device_id = entity_id[3:]
-                    tasks.append(self._sync_single_entity(entity, device_id))
-                else:
-                    _LOG.warning(f"Entity {entity_id} not found in configured_entities during sync")
-
-            if tasks:
-                results = await asyncio.gather(*tasks, return_exceptions=True)
-                for result in results:
-                    if result is True:
-                        synced_count += 1
-
+            # Small delay between batches
             if i + batch_size < len(entity_ids):
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(0.2)
 
         sync_time = time.time() - start_time
-        _LOG.info(f"Initial state synced for {synced_count}/{len(entity_ids)} entities in {sync_time:.1f}s")
-        
-        # CRITICAL DEBUG: Check entity states after sync
-        await asyncio.sleep(0.5)
-        entity_states = await self.api.configured_entities.get_states()
-        _LOG.info(f"=== POST-SYNC STATUS: {len(entity_states)} entities have states ===")
-        if len(entity_states) == 0:
-            _LOG.error("❌ CRITICAL: No entity states available! This is why UC Remote shows entities as unavailable.")
-        else:
-            _LOG.info(f"✅ Entity states ready: {[state['entity_id'] for state in entity_states[:3]]}..." + (" and more" if len(entity_states) > 3 else ""))
+        _LOG.info(f"Initial state sync completed: {synced_count}/{len(entity_ids)} entities in {sync_time:.1f}s")
 
-    async def _sync_single_entity(self, entity, device_id: str) -> bool:
+    async def _sync_single_entity_safe(self, entity_id: str) -> bool:
+        """Safely sync a single entity with error handling"""
         try:
+            entity = self.api.configured_entities.get(entity_id)
+            if not entity:
+                _LOG.warning(f"Entity {entity_id} not found in configured_entities")
+                return False
+
+            device_id = entity_id[3:]  # Remove 'st_' prefix
+            
             async with self.client:
                 device_status = await self.client.get_device_status(device_id)
 
             if device_status:
-                old_attributes = dict(entity.attributes)
                 self.factory.update_entity_attributes(entity, device_status)
-
                 self.api.configured_entities.update_attributes(entity.id, entity.attributes)
-
-                if old_attributes != entity.attributes:
-                    _LOG.info(f"Initial sync: {entity.name} -> {entity.attributes}")
-                else:
-                    _LOG.debug(f"Initial sync: {entity.name} (no change)")
-
+                _LOG.debug(f"Synced state for {entity.name}")
                 return True
+            else:
+                _LOG.warning(f"No status data for {entity_id}")
+                return False
 
         except Exception as e:
-            _LOG.error(f"Failed to sync {entity.id}: {e}")
+            _LOG.error(f"Failed to sync entity {entity_id}: {e}")
             return False
 
     async def _start_polling(self):
@@ -256,9 +267,8 @@ class SmartThingsIntegration:
                     continue
 
                 await self._poll_entities_intelligently()
-
                 consecutive_errors = 0
-
+                
                 sleep_time = self._calculate_polling_interval()
                 await asyncio.sleep(sleep_time)
 
@@ -273,13 +283,12 @@ class SmartThingsIntegration:
                     _LOG.error(f"Too many consecutive errors ({consecutive_errors}), stopping polling")
                     break
 
-                error_sleep = min(30, 5 * consecutive_errors)
-                await asyncio.sleep(error_sleep)
+                await asyncio.sleep(min(30, 5 * consecutive_errors))
 
         self.polling_active = False
 
     async def _poll_entities_intelligently(self):
-        """Poll entities with command awareness - skip devices currently executing commands"""
+        """Poll entities intelligently based on activity"""
         import time
         now = time.time()
         entities_to_poll = []
@@ -290,37 +299,20 @@ class SmartThingsIntegration:
                 continue
 
             device_id = entity_id[3:]
-
             if device_id in self.devices_in_command:
-                _LOG.debug(f"Skipping polling for {entity.name} - command in progress")
                 continue
 
             last_poll = self.entity_last_poll.get(entity_id, 0)
-
             required_interval = self._get_entity_polling_interval(entity_id, now)
 
             if now - last_poll >= required_interval:
                 entities_to_poll.append((entity_id, device_id, entity))
 
-        if not entities_to_poll:
-            _LOG.debug("No entities need polling at this time")
-            return
-
-        _LOG.debug(f"Polling {len(entities_to_poll)} entities")
-
-        batch_size = 5
-        changes_detected = 0
-
-        for i in range(0, len(entities_to_poll), batch_size):
-            batch = entities_to_poll[i:i + batch_size]
-            batch_changes = await self._poll_entity_batch(batch)
-            changes_detected += batch_changes
-
-            if i + batch_size < len(entities_to_poll):
-                await asyncio.sleep(0.4)
-
-        if changes_detected > 0:
-            _LOG.info(f"Detected {changes_detected} state changes in polling")
+        if entities_to_poll:
+            _LOG.debug(f"Polling {len(entities_to_poll)} entities")
+            changes = await self._poll_entity_batch(entities_to_poll)
+            if changes > 0:
+                _LOG.info(f"Detected {changes} state changes")
 
     async def _poll_entity_batch(self, entity_batch):
         """Poll a batch of entities"""
@@ -328,41 +320,45 @@ class SmartThingsIntegration:
         now = time.time()
         changes_detected = 0
 
-        for entity_id, device_id, entity in entity_batch:
-            try:
-                old_attributes = dict(entity.attributes)
+        batch_size = 5
+        for i in range(0, len(entity_batch), batch_size):
+            batch = entity_batch[i:i + batch_size]
+            
+            for entity_id, device_id, entity in batch:
+                try:
+                    old_attributes = dict(entity.attributes)
 
-                async with self.client:
-                    device_status = await self.client.get_device_status(device_id)
+                    async with self.client:
+                        device_status = await self.client.get_device_status(device_id)
 
-                if device_status:
-                    self.factory.update_entity_attributes(entity, device_status)
-                    self.entity_last_poll[entity_id] = now
+                    if device_status:
+                        self.factory.update_entity_attributes(entity, device_status)
+                        self.entity_last_poll[entity_id] = now
 
-                    if old_attributes != entity.attributes:
-                        changes_detected += 1
-                        _LOG.info(f"State changed via polling: {entity.name} -> {entity.attributes}")
+                        if old_attributes != entity.attributes:
+                            changes_detected += 1
+                            _LOG.debug(f"State change: {entity.name}")
 
-                    self.api.configured_entities.update_attributes(entity.id, entity.attributes)
+                        self.api.configured_entities.update_attributes(entity.id, entity.attributes)
 
-                else:
-                    _LOG.debug(f"No status data for {entity.name}")
-
-            except Exception as e:
-                _LOG.warning(f"Failed to poll {entity_id}: {e}")
+                except Exception as e:
+                    _LOG.warning(f"Failed to poll {entity_id}: {e}")
+            
+            # Small delay between batches
+            if i + batch_size < len(entity_batch):
+                await asyncio.sleep(0.3)
 
         return changes_detected
 
     def _get_entity_polling_interval(self, entity_id: str, now: float) -> float:
-        """Get polling interval for entity based on type and activity"""
+        """Get polling interval for entity based on type"""
         base_interval = self.config.get("polling_interval", 12)
-
         entity = self.api.configured_entities.get(entity_id)
+        
         if not entity:
             return base_interval
 
         entity_type = getattr(entity, 'entity_type', None)
-
         if entity_type in ['light', 'switch']:
             return max(base_interval * 0.8, 6)
         elif entity_type == 'sensor':
@@ -373,7 +369,7 @@ class SmartThingsIntegration:
             return base_interval
 
     def _calculate_polling_interval(self) -> float:
-        """Calculate dynamic polling interval based on rate limits and activity"""
+        """Calculate dynamic polling interval"""
         import time
 
         if self.devices_in_command:
@@ -394,7 +390,7 @@ class SmartThingsIntegration:
             return max(base_config * 4, 30)
 
     def track_device_command(self, entity_id: str):
-        """Track when a device starts/stops command execution"""
+        """Track device commands to avoid polling conflicts"""
         device_id = entity_id[3:] if entity_id.startswith("st_") else entity_id
         self.devices_in_command.add(device_id)
 
@@ -403,10 +399,11 @@ class SmartThingsIntegration:
             self.devices_in_command.discard(device_id)
 
         asyncio.create_task(remove_device_from_command())
-        _LOG.debug(f"Tracking command for device {device_id}")
 
     async def _cleanup(self):
+        """Clean up integration resources"""
         self.polling_active = False
+        self.entities_ready = False
 
         if self.status_update_task and not self.status_update_task.done():
             self.status_update_task.cancel()
@@ -424,13 +421,23 @@ class SmartThingsIntegration:
 
         _LOG.info("Integration cleanup completed")
 
+
 async def main():
+    """Main entry point - initialize integration on startup"""
     loop = asyncio.get_event_loop()
     api = IntegrationAPI(loop)
     integration = SmartThingsIntegration(api, loop)
+    
+    # CRITICAL FIX: Pre-initialize entities if already configured
+    # This ensures entities exist BEFORE UC Remote tries to connect/subscribe
+    if integration.config_manager.is_configured():
+        _LOG.info("Integration is configured - pre-initializing entities")
+        # Don't await here - let it initialize in background
+        loop.create_task(integration._initialize_integration())
+    
     await api.init("driver.json", integration.setup_handler)
 
-    _LOG.info("SmartThings Integration is now running. Press Ctrl+C to stop.")
+    _LOG.info("SmartThings Integration is running")
     try:
         while True:
             await asyncio.sleep(3600)

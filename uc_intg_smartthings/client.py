@@ -146,6 +146,7 @@ class HomeAssistantCapabilityMapping:
 
 
 class OAuth2TokenData:
+    """OAuth2 token management - FIXED"""
     def __init__(self, access_token: str, refresh_token: str, expires_in: int, token_type: str = "Bearer"):
         self.access_token = access_token
         self.refresh_token = refresh_token
@@ -273,7 +274,7 @@ class SmartThingsClient:
             _LOG.debug("SmartThings API session closed")
 
     async def _get_authorization_header(self) -> str:
-        """Get authorization header, refreshing OAuth token if needed"""
+        """Get authorization header, refreshing OAuth token if needed - FIXED"""
         if self._oauth_tokens:
             # Don't refresh immediately after getting a new token
             remaining_time = self._oauth_tokens.expires_at - time.time()
@@ -290,7 +291,7 @@ class SmartThingsClient:
             raise SmartThingsAPIError("No authentication token available")
 
     async def _refresh_oauth_token(self):
-        """Refresh OAuth2 access token using refresh token"""
+        """Refresh OAuth2 access token using refresh token - FIXED with Basic Auth"""
         if not self._oauth_tokens or not self._oauth_tokens.refresh_token:
             raise SmartThingsAPIError("No refresh token available")
         
@@ -428,28 +429,43 @@ class SmartThingsClient:
             raise SmartThingsAPIError(f"Request timeout")
 
     def generate_auth_url(self, redirect_uri: str, state: str = None) -> str:
-        """Generate OAuth2 authorization URL"""
+        """Generate OAuth2 authorization URL - FIXED scope encoding"""
         if not self._client_id:
             raise SmartThingsOAuth2Error("No client ID available")
+        
+        scopes = [
+            "r:devices:*",      # Read all devices
+            "w:devices:*",      # Write all devices  
+            "x:devices:*",      # Execute all devices
+            "r:locations:*",    # Read all locations (REQUIRED for location discovery)
+            "r:apps:*",         # Read applications
+            "x:apps:*",         # Execute applications
+            "r:scenes:*",       # Read scenes
+            "x:scenes:*"        # Execute scenes
+        ]
+        
+        # Join scopes with spaces (OAuth2 standard)
+        scope_string = " ".join(scopes)
         
         params = {
             "client_id": self._client_id,
             "response_type": "code",
             "redirect_uri": redirect_uri,
-            "scope": "r:devices:* w:devices:* x:devices:*"
+            "scope": scope_string
         }
         
         if state:
             params["state"] = state
             
-        query_string = urllib.parse.urlencode(params, safe=':*')
+        query_string = urllib.parse.urlencode(params, safe=':*', quote_via=urllib.parse.quote_plus)
         auth_url = f"{self.oauth_base_url}/authorize?{query_string}"
         
         _LOG.info(f"Generated OAuth2 authorization URL: {auth_url}")
+        _LOG.debug(f"Full scopes: {scope_string}")
         return auth_url
 
     async def exchange_code_for_tokens(self, authorization_code: str, redirect_uri: str) -> OAuth2TokenData:
-        """Exchange authorization code for tokens"""
+        """Exchange authorization code for tokens - FIXED with Basic Auth"""
         if not self._client_id or not self._client_secret:
             raise SmartThingsOAuth2Error("No client credentials available")
         
@@ -471,8 +487,7 @@ class SmartThingsClient:
         data = {
             "grant_type": "authorization_code",
             "code": authorization_code,
-            "redirect_uri": redirect_uri,
-            "scope": "r:devices:* w:devices:* x:devices:*"
+            "redirect_uri": redirect_uri
         }
         
         _LOG.info(f"Request data (without client creds): {data}")
@@ -543,7 +558,6 @@ class SmartThingsClient:
                     _LOG.error(f"401 Unauthorized with Basic Auth")
                     _LOG.error(f"Response body: '{response_text}'")
                     
-                    # Enhanced 401 error analysis
                     if "invalid_client" in response_text.lower():
                         _LOG.error("DIAGNOSIS: Invalid client credentials")
                     elif "invalid_grant" in response_text.lower():
@@ -612,7 +626,6 @@ class SmartThingsClient:
                 except Exception as app_error:
                     _LOG.error(f"Failed to get location from installed app: {app_error}")
                 
-                # FALLBACK: Try to get location from devices
                 _LOG.info("FALLBACK: Attempting to get location from devices...")
                 try:
                     devices_response = await self._make_request("GET", "/devices")

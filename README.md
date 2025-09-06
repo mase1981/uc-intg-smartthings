@@ -16,7 +16,7 @@ This integration provides comprehensive control of your SmartThings ecosystem di
 
 Due to the way SmartThings works, to make this integration free/Open Source without the mandatory requirement for a public facing SmartApp (webhooks) I had to use a Pull Method. The downside is that there will be a delay between state change and what the remote will reflect on the screen - This is a trade off to get this integration to work. At some point in the future when UC Team makes SmartThings integration baked into the remote firmware, they will most likely host and maintain their own SmartApp (webhooks) with WWST (Work With SmartThings) Certification.
 
-## What's New in Version 2.1.0
+## What's New in Version 2.0.1
 
 - **OAuth2 Authentication**: Enhanced security with proper OAuth2 flow
 - **SmartApp Integration**: Uses your own SmartApp for authentication
@@ -239,8 +239,8 @@ The SmartThings CLI is a **Node.js application** required to create and manage y
     **Important**: This specific redirect URI has been tested and confirmed working with the integration.
 
 - At the end of this process you will recieve an output with the below information ***MAKE SURE TO COPY SAFELY AND NEVER SHARE THIS INFORMATION - YOU WILL NEED THIS INFORMATION:***
-   - **Client ID**: Long UUID string (e.g., `12345678-1234-1234-1234-123456789abc`)
-   - **Client Secret**: Another long string (e.g., `abcdef12-3456-7890-abcd-ef1234567890`)
+   - **OAuth Client Id**: Long UUID string (e.g., `12345678-1234-1234-1234-123456789abc`)
+   - **OAuth Client Secret**: Another long string (e.g., `abcdef12-3456-7890-abcd-ef1234567890`)
 
 
 ### Step 3: Verify
@@ -300,7 +300,7 @@ The SmartThings CLI is a **Node.js application** required to create and manage y
    - Click **"Complete Setup"**
    - Integration will create entities for all discovered devices
 
-### Step 8: Add Entities to Activities
+### Step 5: Add Entities to Activities
 
 1. Go to **Activities** in your remote interface
 2. Edit or create an activity

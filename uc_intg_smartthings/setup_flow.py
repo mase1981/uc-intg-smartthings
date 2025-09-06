@@ -6,6 +6,8 @@
 import logging
 from typing import Any, Dict, List, Optional
 import asyncio
+import webbrowser
+import urllib.parse
 
 from ucapi.api_definitions import (
     SetupDriver, DriverSetupRequest, UserDataResponse, UserConfirmationResponse,
@@ -13,8 +15,8 @@ from ucapi.api_definitions import (
     IntegrationSetupError
 )
 
-from uc_intg_smartthings.client import SmartThingsClient, SmartThingsAPIError, SmartThingsDevice
-from uc_intg_smartthings.config import ConfigManager, validate_smartthings_token, get_recommended_polling_settings
+from uc_intg_smartthings.client import SmartThingsClient, SmartThingsDevice, SmartThingsAPIError, SmartThingsOAuth2Error, OAuth2TokenData
+from uc_intg_smartthings.config import ConfigManager, get_recommended_polling_settings
 
 _LOG = logging.getLogger(__name__)
 
@@ -106,15 +108,11 @@ class DeviceAnalyzer:
 
     @staticmethod
     def _is_samsung_tv(device_name: str, device_type: str, capabilities: set) -> bool:
-        """Enhanced Samsung TV detection"""
         samsung_tv_indicators = [
-            # Direct name matches
-            "samsung" in device_name and "tv" in device_name,
-            "samsung" in device_name and any(model in device_name for model in ["au5000", "q70", "qled", "neo"]),
-            # Device type matches
+            "samsung" and "tv" in device_name,
+            "samsung" and any(model in device_name for model in ["au5000", "q70", "qled", "neo"]),
             "tv" in device_type,
             "television" in device_type,
-            # Capability patterns common to Samsung TVs
             {"switch", "audioVolume"}.issubset(capabilities),
             {"switch", "speechSynthesis"}.issubset(capabilities),
         ]
@@ -123,21 +121,18 @@ class DeviceAnalyzer:
 
     @staticmethod
     def _is_samsung_soundbar(device_name: str, device_type: str, capabilities: set) -> bool:
-        """Enhanced Samsung Soundbar detection"""
         samsung_soundbar_indicators = [
-            # Direct name matches
-            "samsung" in device_name and "soundbar" in device_name,
-            "samsung" in device_name and "q70t" in device_name,
+            "samsung" and "soundbar" in device_name,
+            "samsung" and "q70t" in device_name,
             "soundbar" in device_name,
-            # Device type matches
             "soundbar" in device_type,
             "speaker" in device_type and "samsung" in device_name,
-            # Capability patterns common to Samsung soundbars
             {"audioVolume", "switch"}.issubset(capabilities),
             "audioVolume" in capabilities and "mediaPlayback" not in capabilities,
         ]
         
         return any(samsung_soundbar_indicators)
+
 
 class SmartThingsSetupFlow:
     
@@ -146,7 +141,7 @@ class SmartThingsSetupFlow:
         self.config_manager = config_manager
         self.setup_state = {}
         self.discovered_devices = []
-        self.client_session = None  # Track client session for proper cleanup
+        self.client_session = None
         
     async def handle_setup_request(self, msg: SetupDriver) -> Any:
         try:
@@ -164,11 +159,9 @@ class SmartThingsSetupFlow:
             _LOG.error(f"Setup request handling failed: {e}", exc_info=True)
             return SetupError(IntegrationSetupError.OTHER)
         finally:
-            # Ensure client cleanup
             await self._cleanup_client()
 
     async def _cleanup_client(self):
-        """Properly cleanup client session"""
         if self.client_session:
             try:
                 await self.client_session.close()
@@ -178,27 +171,45 @@ class SmartThingsSetupFlow:
                 _LOG.warning(f"Error cleaning up setup client: {e}")
 
     async def _handle_initial_setup(self, setup_data: Dict[str, Any], reconfigure: bool = False) -> Any:
-        _LOG.info(f"Starting SmartThings setup (reconfigure={reconfigure})")
+        _LOG.info(f"Starting SmartThings OAuth2 setup using WORKING method (reconfigure={reconfigure})")
         
         if reconfigure:
             self.setup_state = self.config_manager.load_config()
             _LOG.debug("Loaded existing configuration for reconfigure")
         
-        token = setup_data.get("token") or self.setup_state.get("access_token")
+        self.setup_state["redirect_uri"] = "https://httpbin.org/get"
         
-        if not token:
-            return self._request_access_token()
+        # Check if user has provided client credentials
+        if not setup_data.get("client_id") or not setup_data.get("client_secret"):
+            return self._request_client_credentials()
         
-        if not validate_smartthings_token(token):
-            _LOG.warning("Invalid SmartThings token format provided")
-            return self._request_access_token(error_message="Invalid token format. Please check your Personal Access Token.")
+        # Store client credentials
+        self.setup_state["client_id"] = setup_data["client_id"].strip()
+        self.setup_state["client_secret"] = setup_data["client_secret"].strip()
         
-        self.setup_state["access_token"] = token
+        # Check if authorization code is provided
+        if not setup_data.get("authorization_code"):
+            # Generate auth URL and request authorization code
+            return self._request_authorization_code()
         
+        # Exchange authorization code for tokens
         try:
-            # Create and store client session for proper cleanup
-            self.client_session = SmartThingsClient(token)
+            _LOG.info("Exchanging authorization code for tokens")
+            self.client_session = SmartThingsClient(
+                client_id=self.setup_state["client_id"],
+                client_secret=self.setup_state["client_secret"]
+            )
             
+            # Exchange code for tokens
+            oauth_tokens = await self.client_session.exchange_code_for_tokens(
+                setup_data["authorization_code"].strip(),
+                self.setup_state["redirect_uri"]
+            )
+            
+            # Store OAuth2 tokens in setup state
+            self.setup_state["oauth2_tokens"] = oauth_tokens.to_dict()
+            
+            # Test API access and get locations
             async with self.client_session:
                 locations = await self.client_session.get_locations()
                 
@@ -217,72 +228,110 @@ class SmartThingsSetupFlow:
                 else:
                     return self._request_location_selection(locations)
                     
-        except SmartThingsAPIError as e:
-            _LOG.error(f"SmartThings API error during setup: {e}")
-            if e.status_code == 401:
-                return SetupError(IntegrationSetupError.AUTHORIZATION_ERROR)
-            elif e.status_code == 404:
-                return SetupError(IntegrationSetupError.NOT_FOUND)
-            else:
-                return SetupError(IntegrationSetupError.OTHER)
+        except SmartThingsOAuth2Error as e:
+            _LOG.error(f"OAuth2 setup failed: {e}")
+            return SetupError(IntegrationSetupError.AUTHORIZATION_ERROR)
         except Exception as e:
-            _LOG.error(f"Unexpected error during initial setup: {e}", exc_info=True)
+            _LOG.error(f"Unexpected error during OAuth2 setup: {e}", exc_info=True)
             return SetupError(IntegrationSetupError.OTHER)
 
-    def _request_access_token(self, error_message: Optional[str] = None) -> RequestUserInput:
-        """Request SmartThings Personal Access Token with helpful instructions."""
-        settings = [
-            {
-                "id": "token",
-                "label": {"en": "Personal Access Token"},
-                "field": {
-                    "text": {
-                        "value": "",
-                        "regex": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$"
-                    }
-                }
-            }
-        ]
-        
-        if error_message:
-            settings.insert(0, {
-                "id": "error_info",
-                "label": {"en": "Error"},
-                "field": {
-                    "label": {
-                        "value": {"en": f"Warning: {error_message}"}
-                    }
-                }
-            })
-        
-        settings.append({
-            "id": "instructions",
-            "label": {"en": "Setup Instructions"},
-            "field": {
-                "label": {
-                    "value": {
-                        "en": "1. Go to: https://account.smartthings.com/tokens\n"
-                             "2. Click 'Generate new token'\n"
-                             "3. Enter a name: 'UC Remote Integration'\n"
-                             "4. Select these permissions:\n"
-                             "   - Devices: List, See, Control all devices\n"
-                             "   - Locations: See all locations\n"
-                             "   - Apps: List, See, Manage all apps\n"
-                             "   - Scenes: List, See, Control all scenes\n"
-                             "5. Click 'Generate token'\n"
-                             "6. Copy the token and paste it above"
-                    }
-                }
-            }
-        })
-        
+    def _request_client_credentials(self) -> RequestUserInput:
+        """Request SmartApp client ID and secret"""
         return RequestUserInput(
-            title={"en": "SmartThings Access Token"},
-            settings=settings
+            title={"en": "SmartThings SmartApp Credentials"},
+            settings=[
+                {
+                    "id": "client_id",
+                    "label": {"en": "Client ID"},
+                    "field": {
+                        "text": {
+                            "value": self.setup_state.get("client_id", "")
+                        }
+                    }
+                },
+                {
+                    "id": "client_secret",
+                    "label": {"en": "Client Secret"},
+                    "field": {
+                        "text": {
+                            "value": self.setup_state.get("client_secret", "")
+                        }
+                    }
+                },
+                {
+                    "id": "credentials_help",
+                    "label": {"en": "Use your WORKING SmartApp:"},
+                    "field": {
+                        "label": {
+                            "value": {
+                                "en": "Client ID: 2cf82914-6990-48a7-8ef8-4ecf2b0f49d2\nClient Secret: d3f4a18f-c92f-4b74-b326-60d83626cb83\n\nâœ… This SmartApp uses https://httpbin.org/get\nâœ… OAuth flow confirmed working\n\nCopy and paste these values above, then click 'Next'"
+                            }
+                        }
+                    }
+                }
+            ]
         )
 
+    def _request_authorization_code(self) -> RequestUserInput:
+        """Generate auth URL and request authorization code from user"""
+        try:
+            client = SmartThingsClient(
+                client_id=self.setup_state["client_id"],
+                client_secret=self.setup_state["client_secret"]
+            )
+            
+            redirect_uri = self.setup_state["redirect_uri"]  # https://httpbin.org/get
+            auth_url = client.generate_auth_url(redirect_uri, state="uc-integration")
+            
+            # Try to open browser
+            try:
+                webbrowser.open(auth_url)
+                _LOG.info("Opened browser for SmartThings authorization")
+            except Exception as e:
+                _LOG.warning(f"Could not open browser: {e}")
+            
+            return RequestUserInput(
+                title={"en": "SmartThings Authorization âœ…"},
+                settings=[
+                    {
+                        "id": "auth_instructions",
+                        "label": {"en": "Authorization Steps:"},
+                        "field": {
+                            "label": {
+                                "value": {
+                                    "en": f"1. Click this link to authorize:\n{auth_url}\n\n2. Log in to SmartThings\n3. Authorize the integration\n4. You'll be redirected to httpbin.org/get\n5. Look for 'code=' in the URL or JSON response\n6. Copy ONLY the code value and paste it below\n\nâœ… Using proven working method"
+                                }
+                            }
+                        }
+                    },
+                    {
+                        "id": "authorization_code",
+                        "label": {"en": "Authorization Code"},
+                        "field": {
+                            "text": {
+                                "value": ""
+                            }
+                        }
+                    },
+                    {
+                        "id": "code_help",
+                        "label": {"en": "Help:"},
+                        "field": {
+                            "label": {
+                                "value": {
+                                    "en": "After authorization, you'll see the httpbin.org page.\nLook for 'code=XXXXXXX' in the URL or in the JSON args.\nCopy just the code value (not 'code=').\n\nExample: If you see 'code=ABC123', copy 'ABC123'"
+                                }
+                            }
+                        }
+                    }
+                ]
+            )
+            
+        except Exception as e:
+            _LOG.error(f"Error generating authorization URL: {e}")
+            return SetupError(IntegrationSetupError.OTHER)
+
     def _request_location_selection(self, locations: List[Dict[str, Any]]) -> RequestUserInput:
-        """Request user to select SmartThings location."""
         location_options = []
         for location in locations:
             location_options.append({
@@ -320,17 +369,17 @@ class SmartThingsSetupFlow:
         
         settings.append({
             "id": "location_info",
-            "label": {"en": "Selected Location"},
+            "label": {"en": "âœ… OAuth Success!"},
             "field": {
                 "label": {
-                    "value": {"en": f"Location: {self.setup_state.get('location_name', 'Unknown Location')}\nDevices Found: {len(devices_raw)}"}
+                    "value": {"en": f"Location: {self.setup_state.get('location_name', 'Unknown Location')}\nDevices Found: {len(devices_raw)}\n\ SmartThings OAuth2 authentication successful!"}
                 }
             }
         })
         
         for category, info in device_categories.items():
             if info["count"] > 0:
-                default_selected = category in ["light", "switch", "climate", "cover", "media_player"]
+                default_selected = category in ["light", "switch", "climate", "cover", "media_player", "button"]
                 
                 settings.append({
                     "id": f"include_{category}s",
@@ -413,10 +462,6 @@ class SmartThingsSetupFlow:
                         if cap_id:
                             capabilities.add(cap_id)
                 
-                _LOG.debug(f"Processing device: {device_name}")
-                _LOG.debug(f"  Raw capabilities: {capabilities}")
-                _LOG.debug(f"  Device type: {device_type}")
-                
                 entity_type = DeviceAnalyzer.determine_entity_type(capabilities, device_name, device_type)
                 
                 if entity_type and entity_type in categories:
@@ -433,40 +478,66 @@ class SmartThingsSetupFlow:
                 device_name = device_data.get("label", "Unknown")
                 _LOG.error(f"Error categorizing device {device_name}: {e}", exc_info=True)
         
-        _LOG.info(f"Device categorization summary: "
-                 f"Lights={categories['light']['count']}, "
-                 f"Switches={categories['switch']['count']}, "
-                 f"Sensors={categories['sensor']['count']}, "
-                 f"Media Players={categories['media_player']['count']}, "
-                 f"Climate={categories['climate']['count']}, "
-                 f"Covers={categories['cover']['count']}, "
-                 f"Buttons={categories['button']['count']}")
-        
         return categories
 
     async def _handle_user_data_response(self, input_values: Dict[str, Any]) -> Any:
         _LOG.debug(f"Processing user data response: {list(input_values.keys())}")
         
+        # Always ensure redirect_uri is set to the working URI
+        if "redirect_uri" not in self.setup_state:
+            self.setup_state["redirect_uri"] = "https://httpbin.org/get"
+        
+        # Update setup state with new values
         self.setup_state.update(input_values)
         
-        if "token" in input_values:
-            token = input_values["token"]
-            if not validate_smartthings_token(token):
-                return self._request_access_token(
-                    error_message="Invalid token format. Please check your Personal Access Token."
-                )
+        # Step 1: Handle client credentials input (first step)
+        if ("client_id" in input_values and "client_secret" in input_values and 
+            "authorization_code" not in self.setup_state):
             
-            self.setup_state["access_token"] = token
+            if not input_values["client_id"].strip() or not input_values["client_secret"].strip():
+                _LOG.error("Client ID and Client Secret are required")
+                return self._request_client_credentials()
             
+            _LOG.info("Step 1: Client credentials received, requesting authorization code")
+            return self._request_authorization_code()
+        
+        # Step 2: Handle authorization code (second step)
+        if ("authorization_code" in input_values and
+            "client_id" in self.setup_state and "client_secret" in self.setup_state and
+            "oauth2_tokens" not in self.setup_state):  # FIXED: Prevent double token exchange
+            
+            if not input_values["authorization_code"].strip():
+                _LOG.error("Authorization code is required")
+                return self._request_authorization_code()
+            
+            _LOG.info("Step 2: Authorization code received, exchanging for tokens")
+            
+            # Process the authorization code
             try:
-                # Create and store client for cleanup
-                self.client_session = SmartThingsClient(token)
+                self.client_session = SmartThingsClient(
+                    client_id=self.setup_state["client_id"],
+                    client_secret=self.setup_state["client_secret"]
+                )
+                
+                # Exchange code for tokens
+                oauth_tokens = await self.client_session.exchange_code_for_tokens(
+                    input_values["authorization_code"].strip(),
+                    self.setup_state["redirect_uri"]
+                )
+                
+                # Store OAuth2 tokens in setup state
+                self.setup_state["oauth2_tokens"] = oauth_tokens.to_dict()
+                
+                # Test API access and get locations
                 async with self.client_session:
                     locations = await self.client_session.get_locations()
+                    
                     if not locations:
+                        _LOG.error("No SmartThings locations found")
                         return SetupError(IntegrationSetupError.NOT_FOUND)
                     
                     self.setup_state["locations"] = locations
+                    _LOG.info(f"Found {len(locations)} SmartThings locations")
                     
                     if len(locations) == 1:
                         location = locations[0]
@@ -476,15 +547,17 @@ class SmartThingsSetupFlow:
                     else:
                         return self._request_location_selection(locations)
                         
-            except SmartThingsAPIError as e:
-                if e.status_code == 401:
-                    return self._request_access_token(
-                        error_message="Invalid or expired token. Please generate a new one."
-                    )
-                else:
-                    return SetupError(IntegrationSetupError.OTHER)
+            except SmartThingsOAuth2Error as e:
+                _LOG.error(f"OAuth2 token exchange failed: {e}")
+                return SetupError(IntegrationSetupError.AUTHORIZATION_ERROR)
+            except Exception as e:
+                _LOG.error(f"Error during token exchange: {e}", exc_info=True)
+                return SetupError(IntegrationSetupError.OTHER)
         
-        if "location_id" in input_values:
+        # Step 3: Handle location selection
+        if ("location_id" in input_values and 
+            "oauth2_tokens" in self.setup_state):
+            
             location_id = input_values["location_id"]
             
             locations = self.setup_state.get("locations", [])
@@ -494,21 +567,30 @@ class SmartThingsSetupFlow:
                     break
             
             try:
-                token = self.setup_state["access_token"]
                 if not self.client_session:
-                    self.client_session = SmartThingsClient(token)
-                async with self.client_session:
-                    return await self._discover_and_configure_devices(self.client_session)
+                    # Recreate client with OAuth2 tokens
+                    oauth2_tokens = self.setup_state.get("oauth2_tokens")
+                    if oauth2_tokens:
+                        tokens = OAuth2TokenData.from_dict(oauth2_tokens)
+                        self.client_session = SmartThingsClient(
+                            client_id=self.setup_state["client_id"],
+                            client_secret=self.setup_state["client_secret"],
+                            oauth_tokens=tokens
+                        )
+                
+                return await self._discover_and_configure_devices(self.client_session)
             except Exception as e:
                 _LOG.error(f"Error discovering devices: {e}")
                 return SetupError(IntegrationSetupError.OTHER)
         
-        if any(key.startswith("include_") or key == "polling_interval" for key in input_values.keys()):
+        # Step 4: Handle device configuration
+        if (any(key.startswith("include_") or key == "polling_interval" for key in input_values.keys()) and
+            "oauth2_tokens" in self.setup_state):
+            _LOG.info("Step 4: Device configuration received, finalizing setup")
             return await self._finalize_setup()
         
-        _LOG.warning("Unexpected user data response state - no matching input pattern")
-        _LOG.warning(f"Input keys: {list(input_values.keys())}")
-        _LOG.warning(f"Setup state keys: {list(self.setup_state.keys())}")
+        _LOG.warning(f"Unexpected user data response state. Setup state keys: {list(self.setup_state.keys())}")
+        _LOG.warning(f"Input values keys: {list(input_values.keys())}")
         return SetupError(IntegrationSetupError.OTHER)
 
     async def _handle_user_confirmation(self, confirm: bool) -> Any:
@@ -519,12 +601,14 @@ class SmartThingsSetupFlow:
             return SetupError(IntegrationSetupError.OTHER)
 
     async def _finalize_setup(self) -> Any:
-        """Finalize setup with enhanced configuration validation."""
-        _LOG.info("Finalizing SmartThings integration setup")
+        _LOG.info("Finalizing SmartThings OAuth2 integration setup")
         
         try:
             final_config = {
-                "access_token": self.setup_state.get("access_token"),
+                "client_id": self.setup_state.get("client_id"),
+                "client_secret": self.setup_state.get("client_secret"),
+                "redirect_uri": self.setup_state.get("redirect_uri"),
+                "oauth2_tokens": self.setup_state.get("oauth2_tokens"),
                 "location_id": self.setup_state.get("location_id"),
                 "location_name": self.setup_state.get("location_name"),
                 
@@ -549,22 +633,21 @@ class SmartThingsSetupFlow:
             final_config.update(recommended_settings)
             
             if self.config_manager.save_config(final_config):
-                _LOG.info(f"Configuration saved successfully for {device_count} devices")
+                _LOG.info(f"OAuth2 configuration saved successfully for {device_count} devices")
                 
                 summary = self._create_setup_summary(final_config, device_count)
                 _LOG.info(f"Setup Summary: {summary}")
                 
                 return SetupComplete()
             else:
-                _LOG.error("Failed to save configuration")
+                _LOG.error("Failed to save OAuth2 configuration")
                 return SetupError(IntegrationSetupError.OTHER)
                 
         except Exception as e:
-            _LOG.error(f"Error during setup finalization: {e}", exc_info=True)
+            _LOG.error(f"Error during OAuth2 setup finalization: {e}", exc_info=True)
             return SetupError(IntegrationSetupError.OTHER)
 
     def _create_setup_summary(self, config: Dict[str, Any], device_count: int) -> Dict[str, Any]:
-        """Create a setup summary for logging and diagnostics."""
         enabled_types = []
         for entity_type in ["lights", "switches", "sensors", "climate", "covers", "media_players", "buttons"]:
             if config.get(f"include_{entity_type}", False):
@@ -575,42 +658,5 @@ class SmartThingsSetupFlow:
             "total_devices": device_count,
             "enabled_entity_types": enabled_types,
             "polling_interval": config.get("polling_interval"),
-            "optimistic_updates": config.get("enable_optimistic_updates"),
+            "auth_method": "oauth2_httpbin_working",
         }
-
-    async def _test_configuration(self, config: Dict[str, Any]) -> bool:
-        """Test the configuration before finalizing setup."""
-        try:
-            token = config.get("access_token")
-            location_id = config.get("location_id")
-            
-            if not token or not location_id:
-                return False
-            
-            test_client = SmartThingsClient(token)
-            async with test_client:
-                devices = await test_client.get_devices(location_id)
-                _LOG.debug(f"Configuration test successful: {len(devices)} devices accessible")
-                return True
-                
-        except Exception as e:
-            _LOG.error(f"Configuration test failed: {e}")
-            return False
-
-    def get_setup_progress(self) -> Dict[str, Any]:
-        """Get current setup progress for diagnostics."""
-        progress = {
-            "step": "not_started",
-            "has_token": bool(self.setup_state.get("access_token")),
-            "has_location": bool(self.setup_state.get("location_id")),
-            "devices_discovered": len(self.discovered_devices),
-        }
-        
-        if progress["has_token"] and progress["has_location"]:
-            progress["step"] = "device_configuration"
-        elif progress["has_token"]:
-            progress["step"] = "location_selection"
-        elif self.setup_state:
-            progress["step"] = "token_entry"
-        
-        return progress

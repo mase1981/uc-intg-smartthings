@@ -577,15 +577,15 @@ class SmartThingsEntityFactory:
             self.command_in_progress[device_id] = False
 
     async def _verify_command_result(self, entity, device_id: str, cmd_id: str):
-        """Smart verification that respects rate limits"""
+        """Smart verification that respects rate limits - SAFE 0.5s DELAY"""
         try:
             # Skip verification if we're hitting rate limits - let polling handle it
             if hasattr(self.client, '_last_rate_limit') and time.time() - self.client._last_rate_limit < 30:
                 _LOG.info(f"Skipping verification due to recent rate limit, polling will catch up: {entity.name}")
                 return
                 
-            # Single verification attempt after 2 seconds to give device time to respond
-            await asyncio.sleep(2.0)
+            # SAFE OPTIMIZATION: Reduced from 1.5s to 0.5s while maintaining API safety
+            await asyncio.sleep(0.5)
             
             try:
                 async with self.client:

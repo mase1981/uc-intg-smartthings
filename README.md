@@ -3,7 +3,7 @@
 Control your SmartThings devices seamlessly with your Unfolded Circle Remote 2 or Remote 3.
 
 ![SmartThings](https://img.shields.io/badge/SmartThings-Cloud%20API-blue)
-![Version](https://img.shields.io/badge/version-2.1.0-green)
+![Version](https://img.shields.io/badge/version-2.0.10-green)
 ![License](https://img.shields.io/badge/license-MPL--2.0-orange)
 [![Buy Me A Coffee](https://img.shields.io/badge/buy%20me%20a%20coffee-donate-yellow.svg)](https://buymeacoffee.com/meirmiyara)
 [![PayPal](https://img.shields.io/badge/PayPal-donate-blue.svg)](https://paypal.me/mmiyara)
@@ -16,13 +16,15 @@ This integration provides comprehensive control of your SmartThings ecosystem di
 
 Due to the way SmartThings works, to make this integration free/Open Source without the mandatory requirement for a public facing SmartApp (webhooks) I had to use a Pull Method. The downside is that there will be a delay between state change and what the remote will reflect on the screen - This is a trade off to get this integration to work. At some point in the future when UC Team makes SmartThings integration baked into the remote firmware, they will most likely host and maintain their own SmartApp (webhooks) with WWST (Work With SmartThings) Certification.
 
-## What's New in Version 2.0.1
+## What's New in Version 2.1.0
 
 - **OAuth2 Authentication**: Enhanced security with proper OAuth2 flow
 - **SmartApp Integration**: Uses your own SmartApp for authentication
 - **Improved Reliability**: Better session management and reconnection handling
 - **Enhanced Setup**: Step-by-step SmartApp creation and configuration
 - **Optimized Performance**: 0.6s average response time with smart polling
+- **Fixed OAuth2 Scopes**: Resolved "invalid_scope" errors for reliable authentication
+- **Race Condition Fix**: Entities now persist properly after system reboots
 
 ### Supported Device Types
 
@@ -218,72 +220,116 @@ The SmartThings CLI is a **Node.js application** required to create and manage y
    smartthings --version
    ```
 
-### Step 2: Authenticate with SmartThings CLI
+### Step 2: Create SmartApp with Correct OAuth2 Scopes
 
-1. **Start the SmartApp Process:**
+⚠️ **CRITICAL**: The scopes you select here are essential for the integration to work. Using incorrect scopes will cause "invalid_scope" OAuth2 errors.
+
+1. **Start the SmartApp Creation Process:**
    ```bash
    smartthings apps:create
    ```
    
-2. **Follow the prompts: The CLI will guide you through providing the required information for your app, which typically includes:**
+2. **Follow the prompts carefully:**
 
-***Note:*** During this step you will be asked to log into your smartthings account, do so to create the authenticastion, after succesful login you will see in terminal "Login successful" or similar.
+***Note:*** During this step you will be asked to log into your SmartThings account. Complete the authentication - you'll see "Login successful" in the terminal.
 
-- A display name for your integration: ```UC Integration```
-- A description for your integration: ```Unfolded Circle Integration SmartApp```
-- An icon image URL (optional). ```SKIP THIS BY CLICKING ENTER```
- - The target URL of the hosting location of your SmartApp: ```SKIP THIS BY CLICKING ENTER```
- - The permissions (scopes) required by your app: ```toogle everything for simplicity```
- - The redirect URIs: ```https://httpbin.org/get```
+**Required Information:**
+- **Display name**: `UC Integration SmartThings`
+- **Description**: `Unfolded Circle Integration SmartApp for Remote Control`
+- **Icon image URL** (optional): ```SKIP BY PRESSING ENTER```
+- **Target URL** (SmartApp hosting): ```SKIP BY PRESSING ENTER```
 
-    **Important**: This specific redirect URI has been tested and confirmed working with the integration.
+3. **⚠️ CRITICAL STEP - OAuth2 Scopes Selection:**
 
-- At the end of this process you will recieve an output with the below information ***MAKE SURE TO COPY SAFELY AND NEVER SHARE THIS INFORMATION - YOU WILL NEED THIS INFORMATION:***
-   - **OAuth Client Id**: Long UUID string (e.g., `12345678-1234-1234-1234-123456789abc`)
-   - **OAuth Client Secret**: Another long string (e.g., `abcdef12-3456-7890-abcd-ef1234567890`)
+When prompted for **"What permissions (scopes) does your app require?"**, you **MUST** select these exact scopes:
 
+**✅ REQUIRED SCOPES (Select ALL of these):**
+```
+✅ r:devices:*        (Read all devices)
+✅ w:devices:*        (Write to all devices) 
+✅ x:devices:*        (Execute commands on all devices)
+✅ r:locations:*      (Read all locations)
+✅ w:locations:*      (Write to all locations)
+✅ x:locations:*      (Execute location commands)
+```
 
-### Step 3: Verify
+**✅ OPTIONAL BUT RECOMMENDED:**
+```
+✅ r:scenes:*         (Read scenes - for future scene support)
+✅ x:scenes:*         (Execute scenes - for future scene support)
+```
 
-1. Open your smartthings app on your phone
+**❌ DO NOT SELECT SCOPES WITH $ SYMBOLS:**
+- ❌ `r:devices:$` (Will cause OAuth2 failures)
+- ❌ `w:devices:$` (Will cause OAuth2 failures) 
+- ❌ `x:devices:$` (Will cause OAuth2 failures)
 
-2. Go to Menu
+4. **Redirect URIs Configuration:**
+   
+   When prompted for **"What are your redirect URI(s)?"**, enter:
+   ```
+   https://httpbin.org/get
+   ```
+   
+   **Important**: This exact redirect URI has been tested and confirmed working with the integration.
 
-3. Click on the gear at the top right 
+5. **Save Your Credentials:**
 
+   After successful creation, you'll receive this critical information:
+   
+   ```
+   App created successfully!
+   
+   App ID: 12345678-1234-1234-1234-123456789abc
+   OAuth Client ID: abcdef01-2345-6789-abcd-ef0123456789
+   OAuth Client Secret: fedcba98-7654-3210-fedc-ba9876543210
+   ```
+   
+   **⚠️ SECURITY WARNING**: 
+   - **COPY AND SAVE** these credentials immediately
+   - **NEVER SHARE** these credentials publicly
+   - You'll need the **OAuth Client ID** and **OAuth Client Secret** for the integration setup
 
-4. Click on Linked Services and validate you now see ```smartthings-cli```
+### Step 3: Verify SmartApp Creation
+
+1. **Open SmartThings mobile app**
+2. **Go to Menu** (≡)
+3. **Tap the gear icon** (⚙️) at top right
+4. **Select "Linked Services"**
+5. **Verify** you see `smartthings-cli` in the list
 
 ### Step 4: Configure UC Remote Integration
 
-1. After completing buidling the smartthings SmartApp, proceed with installing the integration on your UC Remote, go to **Settings** → **Integrations**
-2. Upload the tar.gz latest from the Github releases section
-3. Once uplaoded click on it and follow the setup wizard:
+1. **Install the integration** on your UC Remote:
+   - Go to **Settings** → **Integrations**
+   - Upload the latest `.tar.gz` from GitHub releases
+   - Click on the integration to start setup
 
-#### **OAuth2 Setup Process:**
+2. **OAuth2 Setup Process:**
 
-1. **Enter Your Client Credentials:**
-   - **Client ID**: Paste your Client ID from Step 2
-   - **Client Secret**: Paste your Client Secret from Step 2
+#### **Step 4.1: Enter Client Credentials**
+   - **Client ID**: Paste your OAuth Client ID from Step 2
+   - **Client Secret**: Paste your OAuth Client Secret from Step 2
    - Click **"Next"**
 
-2. **Authorization Flow:**
-   - Integration will display an authorization URL - it should automatically open a new tab, if not:
-   - Click the link or copy it to your browser
-   - Log in to SmartThings if prompted
-   - Authorize the integration by choosing HOME from the dropdown and click Authorize
-   - You'll be redirected to `https://httpbin.org/get` new page
-   - **Look for the authorization code** in the URL or JSON response
-   - Find: `"code": "your-authorization-code-here"`
-   - **Copy only the code value** (not the entire URL) Should be a string of 5 characters
-   - Paste the authorization code back into the integration
+#### **Step 4.2: Authorization Flow**
+   - Integration will display an authorization URL
+   - Browser should open automatically, if not copy the URL manually
+   - **Log in to SmartThings** if prompted
+   - **Select your HOME** from the dropdown
+   - **Click "Authorize"**
+   - You'll be redirected to `https://httpbin.org/get`
+   
+   **Finding the Authorization Code:**
+   - Look for `"code": "your-authorization-code-here"` in the JSON response
+   - **Copy ONLY the code value** (typically 5-6 characters)
+   - Example: If you see `"code": "ABC12D"`, copy `ABC12D`
+   - **Paste the code** back into the integration setup
 
-3. **Location Selection:**
+#### **Step 4.3: Location & Device Selection**
    - Integration will discover your SmartThings locations
-   - Select the location containing your devices
-
-4. **Device Configuration:**
-   - Choose which device types to include:
+   - **Select the location** containing your devices
+   - **Choose device types** to include:
      - ✅ **Lights** (Recommended)
      - ✅ **Switches** (Recommended) 
      - ✅ **Climate** (Thermostats)
@@ -292,13 +338,14 @@ The SmartThings CLI is a **Node.js application** required to create and manage y
      - ✅ **Buttons** (Smart Buttons)
      - ⚠️ **Sensors** (Monitoring only - optional)
 
-5. **Polling Configuration:**
+#### **Step 4.4: Polling Configuration**
    - **Base Interval**: 8-12 seconds (auto-optimized based on device count)
    - Integration will recommend optimal settings
 
-6. **Complete Setup:**
+#### **Step 4.5: Complete Setup**
    - Click **"Complete Setup"**
    - Integration will create entities for all discovered devices
+   - Entities will persist across system reboots
 
 ### Step 5: Add Entities to Activities
 
@@ -309,6 +356,30 @@ The SmartThings CLI is a **Node.js application** required to create and manage y
 5. Save your activity
 
 ## Troubleshooting SmartApp Creation
+
+### OAuth2 Scope Issues (Most Common)
+
+#### **"invalid_scope" Error During Authorization**
+**Cause**: SmartApp was created with incorrect scopes (likely `$` scopes instead of `*` scopes)
+
+**Solution**: 
+1. **Delete the current SmartApp**:
+   ```bash
+   smartthings apps:delete [YOUR_APP_ID]
+   ```
+2. **Create a NEW SmartApp** following Step 2 exactly
+3. **Ensure you select ONLY wildcard (`*`) scopes**
+4. **Verify no `$` scopes are selected**
+
+#### **"insufficient_scope" Error**
+**Cause**: Missing required scopes in SmartApp configuration
+
+**Solution**:
+1. Update your SmartApp scopes:
+   ```bash
+   smartthings apps:oauth:update [YOUR_APP_ID]
+   ```
+2. Add missing scopes: `r:devices:*`, `w:devices:*`, `x:devices:*`, `r:locations:*`
 
 ### Common CLI Issues
 
@@ -351,13 +422,6 @@ smartthings login
   smartthings apps:oauth:update [YOUR_APP_ID]
   ```
 
-#### **OAuth2 scope issues**
-- Verify all required scopes are enabled:
-  ```bash
-  smartthings apps:oauth [YOUR_APP_ID]
-  ```
-- Required scopes: `r:devices:*`, `w:devices:*`, `x:devices:*`, `r:locations:*`
-
 #### **App installation fails**
 ```bash
 # Check app status
@@ -386,7 +450,13 @@ smartthings apps:install [YOUR_APP_ID]
 - Verify SmartApp installation includes device permissions
 - Check that devices are online in SmartThings app
 - Ensure correct location selection
-- Verify app has all required scopes
+- Verify app has all required scopes (`r:devices:*`, `w:devices:*`, `x:devices:*`)
+
+#### **Entities Become "Unavailable" After Reboot**
+This issue has been **FIXED** in version 2.1.0. If you still experience this:
+- Update to the latest integration version
+- Reconfigure the integration if needed
+- Entities should now persist properly after system reboots
 
 #### **Response Time Issues**
 Commands typically take 0.6-1.2 seconds, which is optimal for this type of integration. If you experience slower responses:

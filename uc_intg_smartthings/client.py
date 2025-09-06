@@ -429,46 +429,35 @@ class SmartThingsClient:
             raise SmartThingsAPIError(f"Request timeout")
 
     def generate_auth_url(self, redirect_uri: str, state: str = None) -> str:
-        """Generate OAuth2 authorization URL - FIXED: Use comma-separated minimal scopes"""
+        """Generate OAuth2 authorization URL - FINAL FIX: Use only $ scopes (no wildcards)"""
         if not self._client_id:
             raise SmartThingsOAuth2Error("No client ID available")
         
-        # FIXED: Use comma-separated scopes matching your SmartApp, minimal essential set
-        # From your CLI: r:devices:$,r:devices:*,r:hubs:*,r:locations:*,r:rules:*,r:scenes:*,w:devices:$,w:devices:*,w:locations:*,w:rules:*,x:devices:$,x:devices:*,x:locations:*,x:scenes:*
-        
-        # Use MINIMAL essential scopes only to avoid wildcard issues
+        # FINAL SOLUTION: Use ONLY $ scopes - SmartThings strips * characters completely
+        # From your CLI you have both $ and * versions, so use the $ versions only
         scopes = [
-            "r:devices:$",      # Read specific devices (essential)
-            "w:devices:$",      # Write specific devices (essential)
-            "x:devices:$",      # Execute specific devices (essential)  
-            "r:locations:*",    # Read locations (needed for location discovery)
-            "w:locations:*",    # Write locations (needed for setup)
-            "x:locations:*"     # Execute locations (needed for control)
+            "r:devices:$",      # Read specific devices (works)
+            "w:devices:$",      # Write specific devices (works)
+            "x:devices:$"       # Execute specific devices (works)
         ]
         
-        # Use comma-separated format (like your CLI shows)
-        scope_string = ",".join(scopes)
+        # Use space-separated format (OAuth2 standard)
+        scope_string = " ".join(scopes)
         
-        _LOG.info("=== COMMA-SEPARATED MINIMAL SCOPES ===")
-        _LOG.info(f"Using comma-separated minimal scopes: '{scope_string}'")
+        _LOG.info("=== FINAL FIX: DOLLAR SCOPES ONLY ===")
+        _LOG.info(f"Using only $ scopes (no wildcards): '{scope_string}'")
         
-        # Build URL with comma-separated scopes
-        params = {
-            "client_id": self._client_id,
-            "response_type": "code",
-            "redirect_uri": redirect_uri,
-            "scope": scope_string
-        }
-        
+        # Build URL manually to avoid encoding issues
+        auth_url = f"{self.oauth_base_url}/authorize"
+        auth_url += f"?client_id={self._client_id}"
+        auth_url += "&response_type=code"
+        auth_url += f"&redirect_uri={urllib.parse.quote(redirect_uri, safe='')}"
+        auth_url += f"&scope={urllib.parse.quote(scope_string, safe='')}"
         if state:
-            params["state"] = state
-        
-        # Use urllib.parse.urlencode for proper encoding
-        query_string = urllib.parse.urlencode(params, safe=':$*,')
-        auth_url = f"{self.oauth_base_url}/authorize?{query_string}"
+            auth_url += f"&state={state}"
         
         _LOG.info(f"Generated URL: '{auth_url}'")
-        _LOG.info("=== END COMMA-SEPARATED TEST ===")
+        _LOG.info("=== END FINAL FIX ===")
         
         return auth_url
 

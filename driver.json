@@ -1,6 +1,6 @@
 {
   "driver_id": "smartthings",
-  "version": "2.0.0",
+  "version": "2.0.10",
   "min_core_api": "0.21.0",
   "name": {
     "en": "SmartThings"
@@ -17,30 +17,18 @@
   "home_page": "https://github.com/mase1981/uc-intg-smartthings",
   "setup_data_schema": {
     "title": {
-      "en": "SmartThings Setup"
+      "en": "SmartThings OAuth2 Setup"
     },
     "settings": [
       {
-        "id": "token",
+        "id": "oauth_info",
         "label": {
-          "en": "Personal Access Token"
-        },
-        "field": {
-          "text": {
-            "value": "",
-            "regex": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$"
-          }
-        }
-      },
-      {
-        "id": "info",
-        "label": {
-          "en": "Setup Instructions"
+          "en": "OAuth2 SmartApp Integration"
         },
         "field": {
           "label": {
             "value": {
-              "en": "1. Go to https://account.smartthings.com/tokens\n2. Click 'Generate new token'\n3. Select these permissions:\n   ✅ Devices: List + See + Control all devices\n   ✅ Locations: See all locations\n   ✅ Installed Applications: List + See + Manage all installed apps\n   ✅ Scenes: List + See + Control all scenes\n   ✅ Rules: See + Control all rules\n   ✅ Custom Capabilities: Read all capabilities\n   ✅ Device Profiles: See all device profiles\n4. Copy the token and paste it above"
+              "en": "This integration uses OAuth2 with your SmartApp.\n\nYou'll need:\n1. Your SmartApp's Client ID\n2. Your SmartApp's Client Secret\n3. To authorize the integration with SmartThings\n\nClick 'Setup' to begin!"
             }
           }
         }

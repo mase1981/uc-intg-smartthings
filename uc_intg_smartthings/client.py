@@ -276,6 +276,7 @@ class SmartThingsClient:
     async def _get_authorization_header(self) -> str:
         """Get authorization header, refreshing OAuth token if needed - FIXED"""
         if self._oauth_tokens:
+            # Don't refresh immediately after getting a new token
             remaining_time = self._oauth_tokens.expires_at - time.time()
             
             if remaining_time < 300:  # Only refresh if less than 5 minutes left
@@ -284,6 +285,7 @@ class SmartThingsClient:
             else:
                 _LOG.debug(f"OAuth token valid for {remaining_time:.0f}s")
             
+            # FIXED: Always use "Bearer" regardless of what SmartThings returns
             return f"Bearer {self._oauth_tokens.access_token}"
         else:
             raise SmartThingsAPIError("No authentication token available")
@@ -427,40 +429,50 @@ class SmartThingsClient:
             raise SmartThingsAPIError(f"Request timeout")
 
     def generate_auth_url(self, redirect_uri: str, state: str = None) -> str:
-        """Generate OAuth2 authorization URL - ULTRA SAFE scope encoding"""
+        """Generate OAuth2 authorization URL - DEBUG VERSION"""
         if not self._client_id:
             raise SmartThingsOAuth2Error("No client ID available")
         
+        # DEBUG: Test with minimal scopes first
         scope_string = "r:devices:* w:devices:* x:devices:*"
         
-        base_params = [
-            f"client_id={self._client_id}",
-            "response_type=code",
-            f"redirect_uri={redirect_uri}",
-            f"scope={scope_string}"
-        ]
+        _LOG.info("=== OAUTH URL GENERATION DEBUG ===")
+        _LOG.info(f"Input scope_string: '{scope_string}'")
+        _LOG.info(f"Client ID: '{self._client_id}'")
+        _LOG.info(f"Redirect URI: '{redirect_uri}'")
+        _LOG.info(f"State: '{state}'")
         
+        # Try completely manual URL construction
+        auth_url = f"{self.oauth_base_url}/authorize"
+        auth_url += f"?client_id={self._client_id}"
+        auth_url += "&response_type=code"
+        auth_url += f"&redirect_uri={urllib.parse.quote(redirect_uri, safe='')}"
+        auth_url += f"&scope={scope_string.replace(' ', '+')}"
         if state:
-            base_params.append(f"state={state}")
+            auth_url += f"&state={state}"
         
-        encoded_params = []
-        for param in base_params:
-            if param.startswith("redirect_uri="):
-                key, value = param.split("=", 1)
-                encoded_value = urllib.parse.quote(value, safe='')
-                encoded_params.append(f"{key}={encoded_value}")
-            elif param.startswith("scope="):
-                key, value = param.split("=", 1)
-                encoded_value = value.replace(" ", "+")
-                encoded_params.append(f"{key}={encoded_value}")
-            else:
-                encoded_params.append(param)
+        _LOG.info(f"Manually constructed URL: '{auth_url}'")
         
-        query_string = "&".join(encoded_params)
-        auth_url = f"{self.oauth_base_url}/authorize?{query_string}"
+        # Also try urllib version for comparison
+        params = {
+            "client_id": self._client_id,
+            "response_type": "code",
+            "redirect_uri": redirect_uri,
+            "scope": scope_string
+        }
+        if state:
+            params["state"] = state
+            
+        urllib_url = f"{self.oauth_base_url}/authorize?{urllib.parse.urlencode(params)}"
+        _LOG.info(f"urllib.parse.urlencode URL: '{urllib_url}'")
         
-        _LOG.info(f"Generated OAuth2 authorization URL: {auth_url}")
-        _LOG.debug(f"Scope parameter: {scope_string}")
+        # Try with safe parameter
+        urllib_safe_url = f"{self.oauth_base_url}/authorize?{urllib.parse.urlencode(params, safe=':*')}"
+        _LOG.info(f"urllib with safe=':*' URL: '{urllib_safe_url}'")
+        
+        _LOG.info("=== END DEBUG ===")
+        
+        # Return the manual version
         return auth_url
 
     async def exchange_code_for_tokens(self, authorization_code: str, redirect_uri: str) -> OAuth2TokenData:

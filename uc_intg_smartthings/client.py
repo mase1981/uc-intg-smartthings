@@ -276,7 +276,6 @@ class SmartThingsClient:
     async def _get_authorization_header(self) -> str:
         """Get authorization header, refreshing OAuth token if needed - FIXED"""
         if self._oauth_tokens:
-            # Don't refresh immediately after getting a new token
             remaining_time = self._oauth_tokens.expires_at - time.time()
             
             if remaining_time < 300:  # Only refresh if less than 5 minutes left
@@ -285,7 +284,6 @@ class SmartThingsClient:
             else:
                 _LOG.debug(f"OAuth token valid for {remaining_time:.0f}s")
             
-            # FIXED: Always use "Bearer" regardless of what SmartThings returns
             return f"Bearer {self._oauth_tokens.access_token}"
         else:
             raise SmartThingsAPIError("No authentication token available")
@@ -429,39 +427,40 @@ class SmartThingsClient:
             raise SmartThingsAPIError(f"Request timeout")
 
     def generate_auth_url(self, redirect_uri: str, state: str = None) -> str:
-        """Generate OAuth2 authorization URL - FIXED scope encoding"""
+        """Generate OAuth2 authorization URL - ULTRA SAFE scope encoding"""
         if not self._client_id:
             raise SmartThingsOAuth2Error("No client ID available")
         
-        scopes = [
-            "r:devices:*",      # Read all devices
-            "w:devices:*",      # Write all devices  
-            "x:devices:*",      # Execute all devices
-            "r:locations:*",    # Read all locations (REQUIRED for location discovery)
-            "r:apps:*",         # Read applications
-            "x:apps:*",         # Execute applications
-            "r:scenes:*",       # Read scenes
-            "x:scenes:*"        # Execute scenes
+        scope_string = "r:devices:* w:devices:* x:devices:*"
+        
+        base_params = [
+            f"client_id={self._client_id}",
+            "response_type=code",
+            f"redirect_uri={redirect_uri}",
+            f"scope={scope_string}"
         ]
         
-        # Join scopes with spaces (OAuth2 standard)
-        scope_string = " ".join(scopes)
-        
-        params = {
-            "client_id": self._client_id,
-            "response_type": "code",
-            "redirect_uri": redirect_uri,
-            "scope": scope_string
-        }
-        
         if state:
-            params["state"] = state
-            
-        query_string = urllib.parse.urlencode(params, safe=':*', quote_via=urllib.parse.quote_plus)
+            base_params.append(f"state={state}")
+        
+        encoded_params = []
+        for param in base_params:
+            if param.startswith("redirect_uri="):
+                key, value = param.split("=", 1)
+                encoded_value = urllib.parse.quote(value, safe='')
+                encoded_params.append(f"{key}={encoded_value}")
+            elif param.startswith("scope="):
+                key, value = param.split("=", 1)
+                encoded_value = value.replace(" ", "+")
+                encoded_params.append(f"{key}={encoded_value}")
+            else:
+                encoded_params.append(param)
+        
+        query_string = "&".join(encoded_params)
         auth_url = f"{self.oauth_base_url}/authorize?{query_string}"
         
         _LOG.info(f"Generated OAuth2 authorization URL: {auth_url}")
-        _LOG.debug(f"Full scopes: {scope_string}")
+        _LOG.debug(f"Scope parameter: {scope_string}")
         return auth_url
 
     async def exchange_code_for_tokens(self, authorization_code: str, redirect_uri: str) -> OAuth2TokenData:
@@ -558,6 +557,7 @@ class SmartThingsClient:
                     _LOG.error(f"401 Unauthorized with Basic Auth")
                     _LOG.error(f"Response body: '{response_text}'")
                     
+                    # Enhanced 401 error analysis
                     if "invalid_client" in response_text.lower():
                         _LOG.error("DIAGNOSIS: Invalid client credentials")
                     elif "invalid_grant" in response_text.lower():
@@ -607,6 +607,7 @@ class SmartThingsClient:
                 _LOG.error("Check your SmartApp configuration in SmartThings CLI")
                 _LOG.error("Required scopes: r:locations:* w:locations:* x:locations:*")
                 
+                # WORKAROUND: Try to get location info from installed app
                 _LOG.info("WORKAROUND: Attempting to get location from installed app...")
                 try:
                     app_response = await self._make_request("GET", "/installedapps")
@@ -626,6 +627,7 @@ class SmartThingsClient:
                 except Exception as app_error:
                     _LOG.error(f"Failed to get location from installed app: {app_error}")
                 
+                # FALLBACK: Try to get location from devices
                 _LOG.info("FALLBACK: Attempting to get location from devices...")
                 try:
                     devices_response = await self._make_request("GET", "/devices")

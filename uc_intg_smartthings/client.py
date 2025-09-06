@@ -429,35 +429,35 @@ class SmartThingsClient:
             raise SmartThingsAPIError(f"Request timeout")
 
     def generate_auth_url(self, redirect_uri: str, state: str = None) -> str:
-        """Generate OAuth2 authorization URL - FINAL FIX: Use only $ scopes (no wildcards)"""
+        """Generate OAuth2 authorization URL - FIXED URL ENCODING"""
         if not self._client_id:
             raise SmartThingsOAuth2Error("No client ID available")
         
-        # FINAL SOLUTION: Use ONLY $ scopes - SmartThings strips * characters completely
-        # From your CLI you have both $ and * versions, so use the $ versions only
+        # Use EXACT scopes from your working SmartApp
         scopes = [
-            "r:devices:$",      # Read specific devices (works)
-            "w:devices:$",      # Write specific devices (works)
-            "x:devices:$"       # Execute specific devices (works)
+            "r:devices:$", "r:devices:*", "r:hubs:*", "r:locations:*", 
+            "r:rules:*", "r:scenes:*", "w:devices:$", "w:devices:*", 
+            "w:locations:*", "w:rules:*", "x:devices:$", "x:devices:*", 
+            "x:locations:*", "x:scenes:*"
         ]
         
-        # Use space-separated format (OAuth2 standard)
-        scope_string = " ".join(scopes)
+        # CRITICAL FIX: Use comma-separated scopes (SmartThings standard)
+        scope_string = ",".join(scopes)
         
-        _LOG.info("=== FINAL FIX: DOLLAR SCOPES ONLY ===")
-        _LOG.info(f"Using only $ scopes (no wildcards): '{scope_string}'")
+        _LOG.info("=== FIXED URL ENCODING ===")
+        _LOG.info(f"Using comma-separated scopes: '{scope_string}'")
         
-        # Build URL manually to avoid encoding issues
+        # CRITICAL: Use raw string building to avoid double-encoding
         auth_url = f"{self.oauth_base_url}/authorize"
         auth_url += f"?client_id={self._client_id}"
         auth_url += "&response_type=code"
         auth_url += f"&redirect_uri={urllib.parse.quote(redirect_uri, safe='')}"
-        auth_url += f"&scope={urllib.parse.quote(scope_string, safe='')}"
+        auth_url += f"&scope={scope_string}"  # NO ENCODING for scopes
         if state:
             auth_url += f"&state={state}"
         
         _LOG.info(f"Generated URL: '{auth_url}'")
-        _LOG.info("=== END FINAL FIX ===")
+        _LOG.info("=== END ENCODING FIX ===")
         
         return auth_url
 

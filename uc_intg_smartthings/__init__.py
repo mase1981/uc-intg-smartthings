@@ -3,4 +3,4 @@
 :license: MPL-2.0, see LICENSE for more details
 """
 
-__version__ = "2.0.7"
+__version__ = "2.0.8"

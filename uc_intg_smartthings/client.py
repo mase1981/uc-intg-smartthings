@@ -429,35 +429,44 @@ class SmartThingsClient:
             raise SmartThingsAPIError(f"Request timeout")
 
     def generate_auth_url(self, redirect_uri: str, state: str = None) -> str:
-        """Generate OAuth2 authorization URL - FIXED URL ENCODING"""
+        """Generate OAuth2 authorization URL - CORRECTED based on SmartThings documentation"""
         if not self._client_id:
             raise SmartThingsOAuth2Error("No client ID available")
         
-        # Use EXACT scopes from your working SmartApp
+        # Use ONLY wildcard scopes as per SmartThings OAuth2 specification
+        # Based on official documentation and working examples
         scopes = [
-            "r:devices:$", "r:devices:*", "r:hubs:*", "r:locations:*", 
-            "r:rules:*", "r:scenes:*", "w:devices:$", "w:devices:*", 
-            "w:locations:*", "w:rules:*", "x:devices:$", "x:devices:*", 
-            "x:locations:*", "x:scenes:*"
+            "r:devices:*",      # Read all devices
+            "w:devices:*",      # Write all devices  
+            "x:devices:*",      # Execute all devices
+            "r:locations:*",    # Read locations (required for setup)
+            "w:locations:*",    # Write locations
+            "x:locations:*"     # Execute locations
         ]
         
-        # CRITICAL FIX: Use comma-separated scopes (SmartThings standard)
-        scope_string = ",".join(scopes)
+        # Use space-separated format (OAuth2 standard)
+        scope_string = " ".join(scopes)
         
-        _LOG.info("=== FIXED URL ENCODING ===")
-        _LOG.info(f"Using comma-separated scopes: '{scope_string}'")
+        _LOG.info("=== CORRECTED SCOPE FORMAT ===")
+        _LOG.info(f"Using wildcard-only scopes: '{scope_string}'")
         
-        # CRITICAL: Use raw string building to avoid double-encoding
-        auth_url = f"{self.oauth_base_url}/authorize"
-        auth_url += f"?client_id={self._client_id}"
-        auth_url += "&response_type=code"
-        auth_url += f"&redirect_uri={urllib.parse.quote(redirect_uri, safe='')}"
-        auth_url += f"&scope={scope_string}"  # NO ENCODING for scopes
+        # Build URL with proper encoding
+        params = {
+            "client_id": self._client_id,
+            "response_type": "code",
+            "redirect_uri": redirect_uri,
+            "scope": scope_string
+        }
+        
         if state:
-            auth_url += f"&state={state}"
+            params["state"] = state
+        
+        # Use urllib.parse.urlencode for consistent encoding across environments
+        query_string = urllib.parse.urlencode(params, quote_via=urllib.parse.quote)
+        auth_url = f"{self.oauth_base_url}/authorize?{query_string}"
         
         _LOG.info(f"Generated URL: '{auth_url}'")
-        _LOG.info("=== END ENCODING FIX ===")
+        _LOG.info("=== END SCOPE CORRECTION ===")
         
         return auth_url
 

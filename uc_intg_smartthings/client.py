@@ -429,20 +429,36 @@ class SmartThingsClient:
             raise SmartThingsAPIError(f"Request timeout")
 
     def generate_auth_url(self, redirect_uri: str, state: str = None) -> str:
-        """Generate OAuth2 authorization URL - DEBUG VERSION"""
+        """Generate OAuth2 authorization URL - EXACT SMARTAPP SCOPE MATCH"""
         if not self._client_id:
             raise SmartThingsOAuth2Error("No client ID available")
         
-        # DEBUG: Test with minimal scopes first
-        scope_string = "r:devices:* w:devices:* x:devices:*"
+        # EXACT MATCH: Use the exact scopes from your SmartApp configuration
+        # From CLI output: r:devices:$,r:devices:*,r:hubs:*,r:locations:*,r:rules:*,r:scenes:*,w:devices:$,w:devices:*,w:locations:*,w:rules:*,x:devices:$,x:devices:*,x:locations:*,x:scenes:*
+        scopes = [
+            "r:devices:$",
+            "r:devices:*", 
+            "r:hubs:*",
+            "r:locations:*",
+            "r:rules:*",
+            "r:scenes:*",
+            "w:devices:$",
+            "w:devices:*",
+            "w:locations:*", 
+            "w:rules:*",
+            "x:devices:$",
+            "x:devices:*",
+            "x:locations:*",
+            "x:scenes:*"
+        ]
         
-        _LOG.info("=== OAUTH URL GENERATION DEBUG ===")
-        _LOG.info(f"Input scope_string: '{scope_string}'")
-        _LOG.info(f"Client ID: '{self._client_id}'")
-        _LOG.info(f"Redirect URI: '{redirect_uri}'")
-        _LOG.info(f"State: '{state}'")
+        # Join with spaces (OAuth2 standard)
+        scope_string = " ".join(scopes)
         
-        # Try completely manual URL construction
+        _LOG.info("=== EXACT SCOPE MATCH TEST ===")
+        _LOG.info(f"Using exact SmartApp scopes: '{scope_string}'")
+        
+        # Manual URL construction to avoid any encoding issues
         auth_url = f"{self.oauth_base_url}/authorize"
         auth_url += f"?client_id={self._client_id}"
         auth_url += "&response_type=code"
@@ -451,28 +467,9 @@ class SmartThingsClient:
         if state:
             auth_url += f"&state={state}"
         
-        _LOG.info(f"Manually constructed URL: '{auth_url}'")
+        _LOG.info(f"Generated URL with exact scopes: '{auth_url}'")
+        _LOG.info("=== END EXACT SCOPE TEST ===")
         
-        # Also try urllib version for comparison
-        params = {
-            "client_id": self._client_id,
-            "response_type": "code",
-            "redirect_uri": redirect_uri,
-            "scope": scope_string
-        }
-        if state:
-            params["state"] = state
-            
-        urllib_url = f"{self.oauth_base_url}/authorize?{urllib.parse.urlencode(params)}"
-        _LOG.info(f"urllib.parse.urlencode URL: '{urllib_url}'")
-        
-        # Try with safe parameter
-        urllib_safe_url = f"{self.oauth_base_url}/authorize?{urllib.parse.urlencode(params, safe=':*')}"
-        _LOG.info(f"urllib with safe=':*' URL: '{urllib_safe_url}'")
-        
-        _LOG.info("=== END DEBUG ===")
-        
-        # Return the manual version
         return auth_url
 
     async def exchange_code_for_tokens(self, authorization_code: str, redirect_uri: str) -> OAuth2TokenData:

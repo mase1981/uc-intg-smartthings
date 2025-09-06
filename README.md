@@ -223,12 +223,12 @@ The SmartThings CLI is a **Node.js application** required to create and manage y
 ### Step 2: Create SmartApp with Correct OAuth2 Scopes
 
 ⚠️ **CRITICAL**: The scopes you select here are essential for the integration to work. Using incorrect scopes will cause "invalid_scope" OAuth2 errors.
-
 1. **Start the SmartApp Creation Process:**
    ```bash
    smartthings apps:create
    ```
-   
+   <img width="548" height="83" alt="image" src="https://github.com/user-attachments/assets/23322c5d-a6b7-424e-93f5-2995caf8337b" />
+
 2. **Follow the prompts carefully:**
 
 ***Note:*** During this step you will be asked to log into your SmartThings account. Complete the authentication - you'll see "Login successful" in the terminal.
@@ -238,6 +238,7 @@ The SmartThings CLI is a **Node.js application** required to create and manage y
 - **Description**: `Unfolded Circle Integration SmartApp for Remote Control`
 - **Icon image URL** (optional): ```SKIP BY PRESSING ENTER```
 - **Target URL** (SmartApp hosting): ```SKIP BY PRESSING ENTER```
+<img width="542" height="72" alt="image" src="https://github.com/user-attachments/assets/5d4a6c91-ab3c-408f-9e09-1cfe07a63393" />
 
 3. **⚠️ CRITICAL STEP - OAuth2 Scopes Selection:**
 
@@ -263,6 +264,7 @@ When prompted for **"What permissions (scopes) does your app require?"**, you **
 - ❌ `r:devices:$` (Will cause OAuth2 failures)
 - ❌ `w:devices:$` (Will cause OAuth2 failures) 
 - ❌ `x:devices:$` (Will cause OAuth2 failures)
+<img width="547" height="256" alt="image" src="https://github.com/user-attachments/assets/54414413-51a6-4656-a8d2-48e7a5b15107" />
 
 4. **Redirect URIs Configuration:**
    
@@ -272,6 +274,7 @@ When prompted for **"What permissions (scopes) does your app require?"**, you **
    ```
    
    **Important**: This exact redirect URI has been tested and confirmed working with the integration.
+<img width="518" height="69" alt="image" src="https://github.com/user-attachments/assets/7009a557-3da4-4eb1-a6d3-947602e08ab3" />
 
 5. **Save Your Credentials:**
 
@@ -289,6 +292,7 @@ When prompted for **"What permissions (scopes) does your app require?"**, you **
    - **COPY AND SAVE** these credentials immediately
    - **NEVER SHARE** these credentials publicly
    - You'll need the **OAuth Client ID** and **OAuth Client Secret** for the integration setup
+<img width="519" height="328" alt="image" src="https://github.com/user-attachments/assets/6f74045a-4fc1-4c66-8ce8-ae9fe0c6c84c" />
 
 ### Step 3: Verify SmartApp Creation
 
@@ -297,6 +301,7 @@ When prompted for **"What permissions (scopes) does your app require?"**, you **
 3. **Tap the gear icon** (⚙️) at top right
 4. **Select "Linked Services"**
 5. **Verify** you see `smartthings-cli` in the list
+<img width="371" height="254" alt="image" src="https://github.com/user-attachments/assets/ada8e32d-18d5-4a09-a8ee-8a4f2cb0cdf7" />
 
 ### Step 4: Configure UC Remote Integration
 

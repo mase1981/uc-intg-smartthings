@@ -32,6 +32,10 @@ class SmartThingsIntegration:
         self.setup_flow = SmartThingsSetupFlow(api, self.config_manager)
         self.status_update_task: Optional[asyncio.Task] = None
 
+        # RACE CONDITION FIX: Track initialization state
+        self.entities_ready = False
+        self.initialization_lock = asyncio.Lock()
+
         self.entity_last_poll = {}
         self.subscribed_entities = set()
         self.polling_active = False
@@ -42,10 +46,17 @@ class SmartThingsIntegration:
     def _register_event_handlers(self):
         @self.api.listens_to(Events.CONNECT)
         async def on_connect():
-            _LOG.info("Connected to UC Remote")
+            _LOG.info("UC Remote connected")
+            
             if self.config_manager.is_configured():
-                await self._initialize_integration()
+                if not self.entities_ready:
+                    _LOG.info("RACE CONDITION PREVENTION: Initializing entities immediately")
+                    await self._initialize_integration()
+                else:
+                    _LOG.info("Entities already ready - connecting immediately")
+                    await self.api.set_device_state(DeviceStates.CONNECTED)
             else:
+                _LOG.info("Integration not configured - awaiting setup")
                 await self.api.set_device_state(DeviceStates.AWAITING_SETUP)
 
         @self.api.listens_to(Events.DISCONNECT)
@@ -55,11 +66,16 @@ class SmartThingsIntegration:
 
         @self.api.listens_to(Events.SUBSCRIBE_ENTITIES)
         async def on_subscribe_entities(entity_ids: List[str]):
-            _LOG.info(f"Remote subscribed to {len(entity_ids)} entities. Starting polling...")
+            _LOG.info(f"Remote subscribed to {len(entity_ids)} entities")
 
             if not self.client or not self.factory:
                 _LOG.error("Client or factory not available during subscription")
                 return
+
+            # RACE CONDITION FIX: Ensure entities are ready before subscription
+            if not self.entities_ready:
+                _LOG.error("RACE CONDITION DETECTED: Subscription before entities ready!")
+                await self._initialize_integration()
 
             self.subscribed_entities = {eid for eid in entity_ids if eid.startswith("st_")}
 
@@ -72,7 +88,8 @@ class SmartThingsIntegration:
         setup_result = await self.setup_flow.handle_setup_request(msg)
         if isinstance(setup_result, uc.SetupComplete):
             _LOG.info("OAuth2 setup complete. Initializing integration immediately.")
-            self.loop.create_task(self._initialize_integration())
+            # RACE CONDITION FIX: Initialize immediately after setup
+            await self._initialize_integration()
         return setup_result
 
     async def _ensure_client_ready(self):
@@ -98,60 +115,77 @@ class SmartThingsIntegration:
             _LOG.error(f"Error ensuring client readiness: {e}")
 
     async def _initialize_integration(self):
-        await self._cleanup()
-        try:
-            await self.api.set_device_state(DeviceStates.CONNECTING)
-            self.config = self.config_manager.load_config()
-            
-            # OAuth2 authentication with client credentials
-            client_id = self.config.get("client_id")
-            client_secret = self.config.get("client_secret")
-            oauth2_tokens = self.config.get("oauth2_tokens")
-            
-            if not client_id or not client_secret:
-                _LOG.error("No client credentials found in configuration")
-                await self.api.set_device_state(DeviceStates.ERROR)
+        """RACE CONDITION FIX: Atomic entity creation before UC Remote subscription attempts"""
+        async with self.initialization_lock:
+            if self.entities_ready:
+                _LOG.debug("Entities already initialized, skipping")
                 return
-                
-            if not oauth2_tokens:
-                _LOG.error("No OAuth2 tokens found in configuration")
-                await self.api.set_device_state(DeviceStates.ERROR)
-                return
+
+            _LOG.info("Starting atomic entity initialization...")
+            await self._cleanup()
             
-            # Initialize client with OAuth2 credentials and tokens
             try:
-                tokens = OAuth2TokenData.from_dict(oauth2_tokens)
-                self.client = SmartThingsClient(
-                    client_id=client_id,
-                    client_secret=client_secret,
-                    oauth_tokens=tokens
-                )
-                _LOG.info("Initialized SmartThings client with OAuth2 authentication")
-            except Exception as e:
-                _LOG.error(f"Failed to initialize OAuth2 client: {e}")
+                await self.api.set_device_state(DeviceStates.CONNECTING)
+                self.config = self.config_manager.load_config()
+                
+                # OAuth2 authentication with client credentials
+                client_id = self.config.get("client_id")
+                client_secret = self.config.get("client_secret")
+                oauth2_tokens = self.config.get("oauth2_tokens")
+                
+                if not client_id or not client_secret:
+                    _LOG.error("No client credentials found in configuration")
+                    await self.api.set_device_state(DeviceStates.ERROR)
+                    return
+                    
+                if not oauth2_tokens:
+                    _LOG.error("No OAuth2 tokens found in configuration")
+                    await self.api.set_device_state(DeviceStates.ERROR)
+                    return
+                
+                # Initialize client with OAuth2 credentials and tokens
+                try:
+                    tokens = OAuth2TokenData.from_dict(oauth2_tokens)
+                    self.client = SmartThingsClient(
+                        client_id=client_id,
+                        client_secret=client_secret,
+                        oauth_tokens=tokens
+                    )
+                    _LOG.info("Initialized SmartThings client with OAuth2 authentication")
+                except Exception as e:
+                    _LOG.error(f"Failed to initialize OAuth2 client: {e}")
+                    await self.api.set_device_state(DeviceStates.ERROR)
+                    return
+
+                self.factory = SmartThingsEntityFactory(self.client, self.api)
+                self.factory.command_callback = self.track_device_command
+
+                # CRITICAL: Create ALL entities BEFORE marking ready
+                await self._create_entities()
+                
+                # RACE CONDITION FIX: Mark entities ready BEFORE setting CONNECTED
+                self.entities_ready = True
+                _LOG.info("All entities created and ready - safe for UC Remote subscription")
+
+                # Now safe for UC Remote to connect and subscribe
+                await self.api.set_device_state(DeviceStates.CONNECTED)
+                _LOG.info("SmartThings OAuth2 integration initialized successfully")
+
+                # Update config with any refreshed tokens
+                await self._save_updated_tokens()
+
+            except SmartThingsOAuth2Error as e:
+                _LOG.error(f"OAuth2 authentication failed: {e}")
                 await self.api.set_device_state(DeviceStates.ERROR)
-                return
-
-            self.factory = SmartThingsEntityFactory(self.client, self.api)
-            self.factory.command_callback = self.track_device_command
-
-            await self._create_entities()
-            await self.api.set_device_state(DeviceStates.CONNECTED)
-            _LOG.info("SmartThings OAuth2 integration initialized successfully")
-            await self._start_polling()
-
-            # Update config with any refreshed tokens
-            await self._save_updated_tokens()
-
-        except SmartThingsOAuth2Error as e:
-            _LOG.error(f"OAuth2 authentication failed: {e}")
-            await self.api.set_device_state(DeviceStates.ERROR)
-        except SmartThingsAPIError as e:
-            _LOG.error(f"SmartThings API error: {e}")
-            await self.api.set_device_state(DeviceStates.ERROR)
-        except Exception as e:
-            _LOG.error(f"Failed to initialize integration: {e}", exc_info=True)
-            await self.api.set_device_state(DeviceStates.ERROR)
+                self.entities_ready = False  # Ensure failure state
+            except SmartThingsAPIError as e:
+                _LOG.error(f"SmartThings API error: {e}")
+                await self.api.set_device_state(DeviceStates.ERROR)
+                self.entities_ready = False  # Ensure failure state
+            except Exception as e:
+                _LOG.error(f"Failed to initialize integration: {e}", exc_info=True)
+                await self.api.set_device_state(DeviceStates.ERROR)
+                self.entities_ready = False  # Ensure failure state
 
     async def _save_updated_tokens(self):
         """Save any updated OAuth2 tokens back to config"""
@@ -166,6 +200,7 @@ class SmartThingsIntegration:
             _LOG.warning(f"Failed to save updated tokens: {e}")
 
     async def _create_entities(self):
+        """RACE CONDITION FIX: Atomic entity creation process"""
         if not self.client or not self.factory:
             _LOG.error("Client or factory not available for entity creation")
             return
@@ -184,11 +219,14 @@ class SmartThingsIntegration:
                 rooms = await self.client.get_rooms(location_id)
 
             room_names = {room["roomId"]: room["name"] for room in rooms}
+            
+            # CRITICAL: Clear existing entities to prevent duplicates
             self.api.available_entities.clear()
             created_count = 0
 
             _LOG.info(f"Processing {len(devices_raw)} devices from SmartThings...")
 
+            # Batch create all entities in one atomic operation
             for device_data in devices_raw:
                 try:
                     device_name = device_data.get("label") or device_data.get("name", "Unknown")
@@ -201,9 +239,9 @@ class SmartThingsIntegration:
                             if cap_id:
                                 capabilities.add(cap_id)
 
-                    _LOG.info(f"Processing device: {device_name}")
-                    _LOG.info(f"  - Device Type: {device_type}")
-                    _LOG.info(f"  - Capabilities ({len(capabilities)}): {list(capabilities)}")
+                    _LOG.debug(f"Processing device: {device_name}")
+                    _LOG.debug(f"  - Device Type: {device_type}")
+                    _LOG.debug(f"  - Capabilities ({len(capabilities)}): {list(capabilities)}")
 
                     entity = self.factory.create_entity(
                         device_data, 
@@ -214,12 +252,11 @@ class SmartThingsIntegration:
                     if entity:
                         if self.api.available_entities.add(entity):
                             created_count += 1
-                            _LOG.info(f"Successfully added entity: {entity.id} ({entity.name})")
+                            _LOG.debug(f"Successfully added entity: {entity.id} ({entity.name})")
                         else:
                             _LOG.warning(f"Failed to add entity to UC API: {entity.id}")
                     else:
-                        _LOG.warning(f"No entity created for device: {device_name}")
-                        _LOG.warning(f"    This device may not be supported yet or lacks required capabilities")
+                        _LOG.debug(f"No entity created for device: {device_name}")
 
                 except Exception as e:
                     device_name = device_data.get("label", device_data.get("name", "Unknown"))
@@ -228,15 +265,14 @@ class SmartThingsIntegration:
             _LOG.info(f"Entity creation summary: {created_count} entities created from {len(devices_raw)} devices")
 
             if created_count == 0:
-                _LOG.error("No entities were created! This indicates:")
-                _LOG.error("   - Devices may not be supported yet")
-                _LOG.error("   - Device capabilities don't match known patterns")
-                _LOG.error("   - Configuration may exclude all device types")
+                _LOG.error("No entities were created!")
+                raise Exception("No entities created - configuration or device support issue")
             else:
-                _LOG.info(f"Successfully created {created_count} entities")
+                _LOG.info(f"Successfully created {created_count} entities atomically")
 
         except Exception as e:
             _LOG.error(f"Failed to create entities: {e}", exc_info=True)
+            raise  # Re-raise to trigger error state
 
     async def _sync_initial_state_immediate(self, entity_ids: List[str]):
         _LOG.info(f"Syncing initial state for {len(entity_ids)} entities...")
@@ -284,7 +320,7 @@ class SmartThingsIntegration:
                 self.api.configured_entities.update_attributes(entity.id, entity.attributes)
 
                 if old_attributes != entity.attributes:
-                    _LOG.info(f"Initial sync: {entity.name} -> {entity.attributes}")
+                    _LOG.debug(f"Initial sync: {entity.name} -> {entity.attributes}")
                 else:
                     _LOG.debug(f"Initial sync: {entity.name} (no change)")
 
@@ -405,7 +441,7 @@ class SmartThingsIntegration:
 
                     if old_attributes != entity.attributes:
                         changes_detected += 1
-                        _LOG.info(f"State changed via polling: {entity.name} -> {entity.attributes}")
+                        _LOG.debug(f"State changed via polling: {entity.name} -> {entity.attributes}")
 
                     self.api.configured_entities.update_attributes(entity.id, entity.attributes)
 
@@ -486,6 +522,9 @@ class SmartThingsIntegration:
         self.entity_last_poll.clear()
         self.subscribed_entities.clear()
         self.devices_in_command.clear()
+        
+        # RACE CONDITION FIX: Reset entities ready state on cleanup
+        self.entities_ready = False
 
         _LOG.info("OAuth2 integration cleanup completed")
 
@@ -494,6 +533,12 @@ async def main():
     loop = asyncio.get_event_loop()
     api = IntegrationAPI(loop)
     integration = SmartThingsIntegration(api, loop)
+    
+    # RACE CONDITION FIX: Pre-initialize if already configured
+    if integration.config_manager.is_configured():
+        _LOG.info("Pre-configuring entities before UC Remote connection")
+        loop.create_task(integration._initialize_integration())
+    
     await api.init("driver.json", integration.setup_handler)
 
     _LOG.info("SmartThings OAuth2 Integration is now running. Press Ctrl+C to stop.")

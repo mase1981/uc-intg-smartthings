@@ -429,46 +429,46 @@ class SmartThingsClient:
             raise SmartThingsAPIError(f"Request timeout")
 
     def generate_auth_url(self, redirect_uri: str, state: str = None) -> str:
-        """Generate OAuth2 authorization URL - EXACT SMARTAPP SCOPE MATCH"""
+        """Generate OAuth2 authorization URL - FIXED: Use comma-separated minimal scopes"""
         if not self._client_id:
             raise SmartThingsOAuth2Error("No client ID available")
         
-        # EXACT MATCH: Use the exact scopes from your SmartApp configuration
-        # From CLI output: r:devices:$,r:devices:*,r:hubs:*,r:locations:*,r:rules:*,r:scenes:*,w:devices:$,w:devices:*,w:locations:*,w:rules:*,x:devices:$,x:devices:*,x:locations:*,x:scenes:*
+        # FIXED: Use comma-separated scopes matching your SmartApp, minimal essential set
+        # From your CLI: r:devices:$,r:devices:*,r:hubs:*,r:locations:*,r:rules:*,r:scenes:*,w:devices:$,w:devices:*,w:locations:*,w:rules:*,x:devices:$,x:devices:*,x:locations:*,x:scenes:*
+        
+        # Use MINIMAL essential scopes only to avoid wildcard issues
         scopes = [
-            "r:devices:$",
-            "r:devices:*", 
-            "r:hubs:*",
-            "r:locations:*",
-            "r:rules:*",
-            "r:scenes:*",
-            "w:devices:$",
-            "w:devices:*",
-            "w:locations:*", 
-            "w:rules:*",
-            "x:devices:$",
-            "x:devices:*",
-            "x:locations:*",
-            "x:scenes:*"
+            "r:devices:$",      # Read specific devices (essential)
+            "w:devices:$",      # Write specific devices (essential)
+            "x:devices:$",      # Execute specific devices (essential)  
+            "r:locations:*",    # Read locations (needed for location discovery)
+            "w:locations:*",    # Write locations (needed for setup)
+            "x:locations:*"     # Execute locations (needed for control)
         ]
         
-        # Join with spaces (OAuth2 standard)
-        scope_string = " ".join(scopes)
+        # Use comma-separated format (like your CLI shows)
+        scope_string = ",".join(scopes)
         
-        _LOG.info("=== EXACT SCOPE MATCH TEST ===")
-        _LOG.info(f"Using exact SmartApp scopes: '{scope_string}'")
+        _LOG.info("=== COMMA-SEPARATED MINIMAL SCOPES ===")
+        _LOG.info(f"Using comma-separated minimal scopes: '{scope_string}'")
         
-        # Manual URL construction to avoid any encoding issues
-        auth_url = f"{self.oauth_base_url}/authorize"
-        auth_url += f"?client_id={self._client_id}"
-        auth_url += "&response_type=code"
-        auth_url += f"&redirect_uri={urllib.parse.quote(redirect_uri, safe='')}"
-        auth_url += f"&scope={scope_string.replace(' ', '+')}"
+        # Build URL with comma-separated scopes
+        params = {
+            "client_id": self._client_id,
+            "response_type": "code",
+            "redirect_uri": redirect_uri,
+            "scope": scope_string
+        }
+        
         if state:
-            auth_url += f"&state={state}"
+            params["state"] = state
         
-        _LOG.info(f"Generated URL with exact scopes: '{auth_url}'")
-        _LOG.info("=== END EXACT SCOPE TEST ===")
+        # Use urllib.parse.urlencode for proper encoding
+        query_string = urllib.parse.urlencode(params, safe=':$*,')
+        auth_url = f"{self.oauth_base_url}/authorize?{query_string}"
+        
+        _LOG.info(f"Generated URL: '{auth_url}'")
+        _LOG.info("=== END COMMA-SEPARATED TEST ===")
         
         return auth_url
 

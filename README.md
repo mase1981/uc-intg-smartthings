@@ -16,7 +16,7 @@ This integration provides comprehensive control of your SmartThings ecosystem di
 
 Due to the way SmartThings works, to make this integration free/Open Source without the mandatory requirement for a public facing SmartApp (webhooks) I had to use a Pull Method. The downside is that there will be a delay between state change and what the remote will reflect on the screen - This is a trade off to get this integration to work. At some point in the future when UC Team makes SmartThings integration baked into the remote firmware, they will most likely host and maintain their own SmartApp (webhooks) with WWST (Work With SmartThings) Certification.
 
-## What's New in Version 2.1.0
+## What's New in Version 2.0.10
 
 - **OAuth2 Authentication**: Enhanced security with proper OAuth2 flow
 - **SmartApp Integration**: Uses your own SmartApp for authentication

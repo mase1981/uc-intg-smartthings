@@ -576,6 +576,13 @@ class SmartThingsEntityFactory:
         
         self.last_command_time[device_id] = now
         
+        # CRITICAL FIX: Check device state before input source commands
+        if cmd_id == 'select_source' and entity_type == EntityType.MEDIA_PLAYER:
+            current_state = entity.attributes.get(MediaAttr.STATE)
+            if current_state != MediaStates.ON:
+                _LOG.warning(f"Cannot select input source on {entity.name}: device is {current_state}. Device must be ON first.")
+                return StatusCodes.BAD_REQUEST
+        
         try:
             # Mark command in progress
             self.command_in_progress[device_id] = True
@@ -639,7 +646,7 @@ class SmartThingsEntityFactory:
                     _LOG.debug(f"No status returned for {entity.name}, polling will catch up")
                     
             except Exception as e:
-                if "429" in str(e):
+                if "409" in str(e):
                     _LOG.info(f"Rate limited during verification for {entity.name}, polling will catch up")
                     # Mark rate limit so future commands can skip verification
                     self.client._last_rate_limit = time.time()

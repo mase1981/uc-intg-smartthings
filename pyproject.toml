@@ -40,9 +40,9 @@ dev = [
 ]
 
 [project.urls]
-"Homepage" = "https://github.com/meiermiyara/uc-intg-smartthings"
-"Bug Reports" = "https://github.com/meiermiyara/uc-intg-smartthings/issues"
-"Source" = "https://github.com/meiermiyara/uc-intg-smartthings"
+"Homepage" = "https://github.com/mase1981/uc-intg-smartthings"
+"Bug Reports" = "https://github.com/mase1981/uc-intg-smartthings/issues"
+"Source" = "https://github.com/mase1981/uc-intg-smartthings"
 
 [tool.setuptools_scm]
 write_to = "uc_intg_smartthings/_version.py"

@@ -3,7 +3,7 @@
 Control your SmartThings devices seamlessly with your Unfolded Circle Remote 2 or Remote 3.
 
 ![SmartThings](https://img.shields.io/badge/SmartThings-Cloud%20API-blue)
-![Version](https://img.shields.io/badge/version-2.0.10-green)
+![Version](https://img.shields.io/badge/version-2.0.11-green)
 ![License](https://img.shields.io/badge/license-MPL--2.0-orange)
 [![Buy Me A Coffee](https://img.shields.io/badge/buy%20me%20a%20coffee-donate-yellow.svg)](https://buymeacoffee.com/meirmiyara)
 [![PayPal](https://img.shields.io/badge/PayPal-donate-blue.svg)](https://paypal.me/mmiyara)

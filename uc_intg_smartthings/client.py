@@ -285,7 +285,6 @@ class SmartThingsClient:
             else:
                 _LOG.debug(f"OAuth token valid for {remaining_time:.0f}s")
             
-            # FIXED: Always use "Bearer" regardless of what SmartThings returns
             return f"Bearer {self._oauth_tokens.access_token}"
         else:
             raise SmartThingsAPIError("No authentication token available")
@@ -298,18 +297,15 @@ class SmartThingsClient:
         if not self._client_id or not self._client_secret:
             raise SmartThingsAPIError("No client credentials available for token refresh")
         
-        # Use Basic Authentication for client credentials
         credentials = f"{self._client_id}:{self._client_secret}"
         credentials_b64 = base64.b64encode(credentials.encode()).decode()
         
-        # Only include grant data, NOT client credentials in form
         data = {
             "grant_type": "refresh_token",
             "refresh_token": self._oauth_tokens.refresh_token
         }
         
         try:
-            # Use Basic Auth header for client credentials
             headers = {
                 "Content-Type": "application/x-www-form-urlencoded",
                 "Authorization": f"Basic {credentials_b64}"
@@ -429,12 +425,9 @@ class SmartThingsClient:
             raise SmartThingsAPIError(f"Request timeout")
 
     def generate_auth_url(self, redirect_uri: str, state: str = None) -> str:
-        """Generate OAuth2 authorization URL - CORRECTED based on SmartThings documentation"""
         if not self._client_id:
             raise SmartThingsOAuth2Error("No client ID available")
         
-        # Use ONLY wildcard scopes as per SmartThings OAuth2 specification
-        # Based on official documentation and working examples
         scopes = [
             "r:devices:*",      # Read all devices
             "w:devices:*",      # Write all devices  
@@ -471,7 +464,6 @@ class SmartThingsClient:
         return auth_url
 
     async def exchange_code_for_tokens(self, authorization_code: str, redirect_uri: str) -> OAuth2TokenData:
-        """Exchange authorization code for tokens - FIXED with Basic Auth"""
         if not self._client_id or not self._client_secret:
             raise SmartThingsOAuth2Error("No client credentials available")
         
@@ -614,7 +606,6 @@ class SmartThingsClient:
                 _LOG.error("Check your SmartApp configuration in SmartThings CLI")
                 _LOG.error("Required scopes: r:locations:* w:locations:* x:locations:*")
                 
-                # WORKAROUND: Try to get location info from installed app
                 _LOG.info("WORKAROUND: Attempting to get location from installed app...")
                 try:
                     app_response = await self._make_request("GET", "/installedapps")
@@ -634,7 +625,6 @@ class SmartThingsClient:
                 except Exception as app_error:
                     _LOG.error(f"Failed to get location from installed app: {app_error}")
                 
-                # FALLBACK: Try to get location from devices
                 _LOG.info("FALLBACK: Attempting to get location from devices...")
                 try:
                     devices_response = await self._make_request("GET", "/devices")

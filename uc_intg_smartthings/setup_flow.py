@@ -114,14 +114,15 @@ class DeviceAnalyzer:
     @staticmethod
     def _is_samsung_soundbar(device_name: str, device_type: str, capabilities: set) -> bool:
         samsung_soundbar_indicators = [
-            "samsung" and "soundbar" in device_name,
-            "samsung" and "q70t" in device_name,
-            "samsung" and "q90r" in device_name,
-            "samsung" and "q950t" in device_name,
+            "samsung" in device_name and "soundbar" in device_name,
+            "samsung" in device_name and "q70t" in device_name,
+            "samsung" in device_name and "q90r" in device_name,
+            "samsung" in device_name and "q950t" in device_name,
             "soundbar" in device_name,
             "soundbar" in device_type,
             "speaker" in device_type and "samsung" in device_name,
             "network audio" in device_type,
+            "samsung" in device_type and "soundbar" in device_name,
             {"audioVolume", "switch"}.issubset(capabilities),
             "audioVolume" in capabilities and "mediaPlayback" not in capabilities,
         ]
@@ -250,7 +251,7 @@ class SmartThingsSetupFlow:
                     "field": {
                         "label": {
                             "value": {
-                                "en": "Client ID: 2cf82914-6990-48a7-8ef8-4ecf2b0f49d2\nClient Secret: d3f4a18f-c92f-4b74-b326-60d83626cb83\n\n✅ This SmartApp uses https://httpbin.org/get\n✅ OAuth flow confirmed working\n\nCopy and paste these values above, then click 'Next'"
+                                "en": "Client ID: 2cf82914-6990-48a7-8ef8-4ecf2b0f49d2\nClient Secret: d3f4a18f-c92f-4b74-b326-60d83626cb83\n\nâœ… This SmartApp uses https://httpbin.org/get\nâœ… OAuth flow confirmed working\n\nCopy and paste these values above, then click 'Next'"
                             }
                         }
                     }
@@ -275,7 +276,7 @@ class SmartThingsSetupFlow:
                 _LOG.warning(f"Could not open browser: {e}")
             
             return RequestUserInput(
-                title={"en": "SmartThings Authorization ✅"},
+                title={"en": "SmartThings Authorization âœ…"},
                 settings=[
                     {
                         "id": "auth_instructions",
@@ -283,7 +284,7 @@ class SmartThingsSetupFlow:
                         "field": {
                             "label": {
                                 "value": {
-                                    "en": f"1. Click this link to authorize:\n{auth_url}\n\n2. Log in to SmartThings\n3. Authorize the integration\n4. You'll be redirected to httpbin.org/get\n5. Look for 'code=' in the URL or JSON response\n6. Copy ONLY the code value and paste it below\n\n✅ Using proven working method"
+                                    "en": f"1. Click this link to authorize:\n{auth_url}\n\n2. Log in to SmartThings\n3. Authorize the integration\n4. You'll be redirected to httpbin.org/get\n5. Look for 'code=' in the URL or JSON response\n6. Copy ONLY the code value and paste it below\n\nâœ… Using proven working method"
                                 }
                             }
                         }
@@ -353,10 +354,10 @@ class SmartThingsSetupFlow:
         
         settings.append({
             "id": "location_info",
-            "label": {"en": "✅ OAuth Success!"},
+            "label": {"en": "âœ… OAuth Success!"},
             "field": {
                 "label": {
-                    "value": {"en": f"Location: {self.setup_state.get('location_name', 'Unknown Location')}\nDevices Found: {len(devices_raw)}\n✅ SmartThings OAuth2 authentication successful!"}
+                    "value": {"en": f"Location: {self.setup_state.get('location_name', 'Unknown Location')}\nDevices Found: {len(devices_raw)}\nâœ… SmartThings OAuth2 authentication successful!"}
                 }
             }
         })

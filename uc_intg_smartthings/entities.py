@@ -356,11 +356,26 @@ class SmartThingsEntityFactory:
         initial_attributes = {MediaAttr.STATE: MediaStates.UNKNOWN}
         
         if ("mediaInputSource" in device.capabilities or "samsungvd.mediaInputSource" in device.capabilities or "samsungvd.audioInputSource" in device.capabilities):
-            if "samsung" in device_name.lower() and ("soundbar" in device_name.lower() or "q90r" in device_name.lower() or "q950t" in device_name.lower()):
-                initial_attributes[MediaAttr.SOURCE_LIST] = [
-                    "HDMI1", "HDMI2", "HDMI3", "HDMI4", "USB", "aux", "bluetooth", "optical", 
-                    "coaxial", "network", "wifi"
-                ]
+            is_samsung_soundbar = (
+                ("samsung" in device_name or "samsung" in device_type) and
+                any(model in device_name for model in ["soundbar", "q70t", "q90r", "q950t"])
+            )
+            
+            if is_samsung_soundbar:
+                if "q70t" in device_name:
+                    initial_attributes[MediaAttr.SOURCE_LIST] = [
+                        "digital", "HDMI1", "bluetooth", "wifi"
+                    ]
+                elif "q950t" in device_name or "q90r" in device_name:
+                    initial_attributes[MediaAttr.SOURCE_LIST] = [
+                        "digital", "HDMI1", "HDMI2", "HDMI3", "HDMI4", "USB", "aux", 
+                        "bluetooth", "optical", "coaxial", "network", "wifi"
+                    ]
+                else:
+                    initial_attributes[MediaAttr.SOURCE_LIST] = [
+                        "HDMI1", "HDMI2", "HDMI3", "HDMI4", "USB", "aux", "bluetooth", 
+                        "optical", "coaxial", "network", "wifi"
+                    ]
             else:
                 initial_attributes[MediaAttr.SOURCE_LIST] = [
                     "HDMI1", "HDMI2", "HDMI3", "HDMI4", "USB", "aux", "bluetooth", "optical"
@@ -733,7 +748,7 @@ class SmartThingsEntityFactory:
                         args = [source_param]
                         _LOG.info(f"Setting Samsung VD input source to: {source_param}")
                     elif "samsungvd.audioInputSource" in capabilities:
-                        capability, command = 'samsungvd.audioInputSource', 'setAudioInputSource'
+                        capability, command = 'samsungvd.audioInputSource', 'setInputSource'
                         args = [source_param]
                         _LOG.info(f"Setting Samsung audio input source to: {source_param}")
                     else:

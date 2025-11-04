@@ -733,7 +733,7 @@ class SmartThingsEntityFactory:
                         args = [source_param]
                         _LOG.info(f"Setting Samsung VD input source to: {source_param}")
                     elif "samsungvd.audioInputSource" in capabilities:
-                        capability, command = 'samsungvd.audioInputSource', 'setInputSource'
+                        capability, command = 'samsungvd.audioInputSource', 'setAudioInputSource'
                         args = [source_param]
                         _LOG.info(f"Setting Samsung audio input source to: {source_param}")
                     else:

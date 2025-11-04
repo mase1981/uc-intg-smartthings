@@ -39,16 +39,13 @@ class DeviceAnalyzer:
             _LOG.info(f"Samsung Soundbar detected: {device_name} -> media_player") 
             return "media_player"
         
-        # Button detection
         if "button" in capabilities or "momentary" in capabilities:
             return "button"
         
-        # Climate detection
         climate_caps = {"thermostat", "thermostatCoolingSetpoint", "thermostatHeatingSetpoint", "airConditioner"}
         if climate_caps.intersection(capabilities):
             return "climate"
         
-        # Media player detection
         media_caps = {"mediaPlayback", "audioVolume", "tvChannel", "mediaTrackControl", "speechSynthesis"}
         media_keywords = ["tv", "television", "soundbar", "speaker", "audio", "receiver", "stereo", "music"]
         
@@ -57,12 +54,10 @@ class DeviceAnalyzer:
             any(keyword in device_type_lower for keyword in media_keywords)):
             return "media_player"
         
-        # Cover detection
         cover_caps = {"doorControl", "windowShade", "garageDoorControl"}
         if cover_caps.intersection(capabilities):
             return "cover"
         
-        # Light detection
         light_caps = {"switchLevel", "colorControl", "colorTemperature"}
         if light_caps.intersection(capabilities):
             excluded_caps = {
@@ -73,11 +68,9 @@ class DeviceAnalyzer:
             if not excluded_caps.intersection(capabilities):
                 return "light"
         
-        # Light detection by name
         if "switch" in capabilities and any(word in device_name_lower for word in ["light", "lamp", "bulb", "led"]):
             return "light"
         
-        # Sensor detection
         sensor_caps = {
             "lock", "contactSensor", "motionSensor", "presenceSensor", 
             "temperatureMeasurement", "relativeHumidityMeasurement",
@@ -90,7 +83,6 @@ class DeviceAnalyzer:
         if sensor_caps.intersection(capabilities):
             return "sensor"
         
-        # Basic switch detection (fallback)
         if "switch" in capabilities:
             excluded_caps = {
                 "switchLevel", "colorControl", "colorTemperature",
@@ -124,9 +116,12 @@ class DeviceAnalyzer:
         samsung_soundbar_indicators = [
             "samsung" and "soundbar" in device_name,
             "samsung" and "q70t" in device_name,
+            "samsung" and "q90r" in device_name,
+            "samsung" and "q950t" in device_name,
             "soundbar" in device_name,
             "soundbar" in device_type,
             "speaker" in device_type and "samsung" in device_name,
+            "network audio" in device_type,
             {"audioVolume", "switch"}.issubset(capabilities),
             "audioVolume" in capabilities and "mediaPlayback" not in capabilities,
         ]
@@ -179,20 +174,15 @@ class SmartThingsSetupFlow:
         
         self.setup_state["redirect_uri"] = "https://httpbin.org/get"
         
-        # Check if user has provided client credentials
         if not setup_data.get("client_id") or not setup_data.get("client_secret"):
             return self._request_client_credentials()
         
-        # Store client credentials
         self.setup_state["client_id"] = setup_data["client_id"].strip()
         self.setup_state["client_secret"] = setup_data["client_secret"].strip()
         
-        # Check if authorization code is provided
         if not setup_data.get("authorization_code"):
-            # Generate auth URL and request authorization code
             return self._request_authorization_code()
         
-        # Exchange authorization code for tokens
         try:
             _LOG.info("Exchanging authorization code for tokens")
             self.client_session = SmartThingsClient(
@@ -200,16 +190,13 @@ class SmartThingsSetupFlow:
                 client_secret=self.setup_state["client_secret"]
             )
             
-            # Exchange code for tokens
             oauth_tokens = await self.client_session.exchange_code_for_tokens(
                 setup_data["authorization_code"].strip(),
                 self.setup_state["redirect_uri"]
             )
             
-            # Store OAuth2 tokens in setup state
             self.setup_state["oauth2_tokens"] = oauth_tokens.to_dict()
             
-            # Test API access and get locations
             async with self.client_session:
                 locations = await self.client_session.get_locations()
                 
@@ -236,7 +223,6 @@ class SmartThingsSetupFlow:
             return SetupError(IntegrationSetupError.OTHER)
 
     def _request_client_credentials(self) -> RequestUserInput:
-        """Request SmartApp client ID and secret"""
         return RequestUserInput(
             title={"en": "SmartThings SmartApp Credentials"},
             settings=[
@@ -264,7 +250,7 @@ class SmartThingsSetupFlow:
                     "field": {
                         "label": {
                             "value": {
-                                "en": "Client ID: 2cf82914-6990-48a7-8ef8-4ecf2b0f49d2\nClient Secret: d3f4a18f-c92f-4b74-b326-60d83626cb83\n\nâœ… This SmartApp uses https://httpbin.org/get\nâœ… OAuth flow confirmed working\n\nCopy and paste these values above, then click 'Next'"
+                                "en": "Client ID: 2cf82914-6990-48a7-8ef8-4ecf2b0f49d2\nClient Secret: d3f4a18f-c92f-4b74-b326-60d83626cb83\n\n✅ This SmartApp uses https://httpbin.org/get\n✅ OAuth flow confirmed working\n\nCopy and paste these values above, then click 'Next'"
                             }
                         }
                     }
@@ -273,17 +259,15 @@ class SmartThingsSetupFlow:
         )
 
     def _request_authorization_code(self) -> RequestUserInput:
-        """Generate auth URL and request authorization code from user"""
         try:
             client = SmartThingsClient(
                 client_id=self.setup_state["client_id"],
                 client_secret=self.setup_state["client_secret"]
             )
             
-            redirect_uri = self.setup_state["redirect_uri"]  # https://httpbin.org/get
+            redirect_uri = self.setup_state["redirect_uri"]
             auth_url = client.generate_auth_url(redirect_uri, state="uc-integration")
             
-            # Try to open browser
             try:
                 webbrowser.open(auth_url)
                 _LOG.info("Opened browser for SmartThings authorization")
@@ -291,7 +275,7 @@ class SmartThingsSetupFlow:
                 _LOG.warning(f"Could not open browser: {e}")
             
             return RequestUserInput(
-                title={"en": "SmartThings Authorization âœ…"},
+                title={"en": "SmartThings Authorization ✅"},
                 settings=[
                     {
                         "id": "auth_instructions",
@@ -299,7 +283,7 @@ class SmartThingsSetupFlow:
                         "field": {
                             "label": {
                                 "value": {
-                                    "en": f"1. Click this link to authorize:\n{auth_url}\n\n2. Log in to SmartThings\n3. Authorize the integration\n4. You'll be redirected to httpbin.org/get\n5. Look for 'code=' in the URL or JSON response\n6. Copy ONLY the code value and paste it below\n\nâœ… Using proven working method"
+                                    "en": f"1. Click this link to authorize:\n{auth_url}\n\n2. Log in to SmartThings\n3. Authorize the integration\n4. You'll be redirected to httpbin.org/get\n5. Look for 'code=' in the URL or JSON response\n6. Copy ONLY the code value and paste it below\n\n✅ Using proven working method"
                                 }
                             }
                         }
@@ -369,10 +353,10 @@ class SmartThingsSetupFlow:
         
         settings.append({
             "id": "location_info",
-            "label": {"en": "âœ… OAuth Success!"},
+            "label": {"en": "✅ OAuth Success!"},
             "field": {
                 "label": {
-                    "value": {"en": f"Location: {self.setup_state.get('location_name', 'Unknown Location')}\nDevices Found: {len(devices_raw)}\n\ SmartThings OAuth2 authentication successful!"}
+                    "value": {"en": f"Location: {self.setup_state.get('location_name', 'Unknown Location')}\nDevices Found: {len(devices_raw)}\n✅ SmartThings OAuth2 authentication successful!"}
                 }
             }
         })
@@ -483,14 +467,11 @@ class SmartThingsSetupFlow:
     async def _handle_user_data_response(self, input_values: Dict[str, Any]) -> Any:
         _LOG.debug(f"Processing user data response: {list(input_values.keys())}")
         
-        # Always ensure redirect_uri is set to the working URI
         if "redirect_uri" not in self.setup_state:
             self.setup_state["redirect_uri"] = "https://httpbin.org/get"
         
-        # Update setup state with new values
         self.setup_state.update(input_values)
         
-        # Step 1: Handle client credentials input (first step)
         if ("client_id" in input_values and "client_secret" in input_values and 
             "authorization_code" not in self.setup_state):
             
@@ -501,10 +482,9 @@ class SmartThingsSetupFlow:
             _LOG.info("Step 1: Client credentials received, requesting authorization code")
             return self._request_authorization_code()
         
-        # Step 2: Handle authorization code (second step)
         if ("authorization_code" in input_values and
             "client_id" in self.setup_state and "client_secret" in self.setup_state and
-            "oauth2_tokens" not in self.setup_state):  # FIXED: Prevent double token exchange
+            "oauth2_tokens" not in self.setup_state):
             
             if not input_values["authorization_code"].strip():
                 _LOG.error("Authorization code is required")
@@ -512,23 +492,19 @@ class SmartThingsSetupFlow:
             
             _LOG.info("Step 2: Authorization code received, exchanging for tokens")
             
-            # Process the authorization code
             try:
                 self.client_session = SmartThingsClient(
                     client_id=self.setup_state["client_id"],
                     client_secret=self.setup_state["client_secret"]
                 )
                 
-                # Exchange code for tokens
                 oauth_tokens = await self.client_session.exchange_code_for_tokens(
                     input_values["authorization_code"].strip(),
                     self.setup_state["redirect_uri"]
                 )
                 
-                # Store OAuth2 tokens in setup state
                 self.setup_state["oauth2_tokens"] = oauth_tokens.to_dict()
                 
-                # Test API access and get locations
                 async with self.client_session:
                     locations = await self.client_session.get_locations()
                     
@@ -554,7 +530,6 @@ class SmartThingsSetupFlow:
                 _LOG.error(f"Error during token exchange: {e}", exc_info=True)
                 return SetupError(IntegrationSetupError.OTHER)
         
-        # Step 3: Handle location selection
         if ("location_id" in input_values and 
             "oauth2_tokens" in self.setup_state):
             
@@ -568,7 +543,6 @@ class SmartThingsSetupFlow:
             
             try:
                 if not self.client_session:
-                    # Recreate client with OAuth2 tokens
                     oauth2_tokens = self.setup_state.get("oauth2_tokens")
                     if oauth2_tokens:
                         tokens = OAuth2TokenData.from_dict(oauth2_tokens)
@@ -583,7 +557,6 @@ class SmartThingsSetupFlow:
                 _LOG.error(f"Error discovering devices: {e}")
                 return SetupError(IntegrationSetupError.OTHER)
         
-        # Step 4: Handle device configuration
         if (any(key.startswith("include_") or key == "polling_interval" for key in input_values.keys()) and
             "oauth2_tokens" in self.setup_state):
             _LOG.info("Step 4: Device configuration received, finalizing setup")

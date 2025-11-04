@@ -36,9 +36,9 @@ class SmartThingsEntityFactory:
     def __init__(self, client: SmartThingsClient, api: IntegrationAPI):
         self.client = client
         self.api = api
-        self.command_in_progress = {}  # Track active commands per device
-        self.command_queue = {}  # Queue commands per device to prevent flooding
-        self.last_command_time = {}  # Track last command time per device
+        self.command_in_progress = {}
+        self.command_queue = {}
+        self.last_command_time = {}
         self.command_callback = None
 
     def determine_entity_type(self, device: SmartThingsDevice) -> Optional[str]:
@@ -51,7 +51,6 @@ class SmartThingsEntityFactory:
         _LOG.info(f"  - Device Type: {device_type}")
         _LOG.info(f"  - Device Name: {device_name}")
         
-        # Enhanced Samsung device detection
         if self._is_samsung_tv(device_name, device_type, capabilities):
             _LOG.info(f"Samsung TV detected: {device.label} -> MEDIA_PLAYER")
             return EntityType.MEDIA_PLAYER
@@ -60,18 +59,15 @@ class SmartThingsEntityFactory:
             _LOG.info(f"Samsung Soundbar detected: {device.label} -> MEDIA_PLAYER")
             return EntityType.MEDIA_PLAYER
         
-        # Button detection
         if "button" in capabilities or "momentary" in capabilities:
             _LOG.info(f"Button {device.label} -> BUTTON (has button capability)")
             return EntityType.BUTTON
         
-        # Climate detection
         climate_caps = {"thermostat", "thermostatCoolingSetpoint", "thermostatHeatingSetpoint", "airConditioner"}
         if climate_caps.intersection(capabilities):
             _LOG.info(f"Climate {device.label} -> CLIMATE (has {climate_caps.intersection(capabilities)})")
             return EntityType.CLIMATE
         
-        # Media player detection
         media_caps = {"mediaPlayback", "audioVolume", "tvChannel", "mediaTrackControl", "speechSynthesis"}
         media_keywords = ["tv", "television", "soundbar", "speaker", "audio", "receiver", "stereo", "music"]
         
@@ -81,18 +77,15 @@ class SmartThingsEntityFactory:
             _LOG.info(f"Media Player {device.label} -> MEDIA_PLAYER (caps: {media_caps.intersection(capabilities)}, name match: {any(keyword in device_name for keyword in media_keywords)})")
             return EntityType.MEDIA_PLAYER
         
-        # Cover detection
         cover_caps = {"doorControl", "windowShade", "garageDoorControl"}
         if cover_caps.intersection(capabilities):
             _LOG.info(f"Cover {device.label} -> COVER (has {cover_caps.intersection(capabilities)})")
             return EntityType.COVER
         
-        # Lock detection (as switch)
         if "lock" in capabilities and "switch" not in capabilities:
             _LOG.info(f"Lock {device.label} -> SWITCH (lock as switch for control)")
             return EntityType.SWITCH
         
-        # Light detection
         light_caps = {"switchLevel", "colorControl", "colorTemperature"}
         light_indicators = light_caps.intersection(capabilities)
         light_keywords = ["light", "lamp", "bulb", "led", "fixture", "sconce", "chandelier", "dimmer"]
@@ -110,7 +103,6 @@ class SmartThingsEntityFactory:
                     _LOG.info(f"Light {device.label} -> LIGHT (name contains light keyword)")
                 return EntityType.LIGHT
         
-        # Sensor detection
         sensor_caps = {
             "contactSensor", "motionSensor", "presenceSensor", 
             "temperatureMeasurement", "relativeHumidityMeasurement",
@@ -125,7 +117,6 @@ class SmartThingsEntityFactory:
             _LOG.info(f"Sensor {device.label} -> SENSOR (has {sensor_matches})")
             return EntityType.SENSOR
         
-        # Basic switch detection (fallback)
         if "switch" in capabilities:
             excluded_caps = {
                 "switchLevel", "colorControl", "colorTemperature",
@@ -145,15 +136,11 @@ class SmartThingsEntityFactory:
         return None
 
     def _is_samsung_tv(self, device_name: str, device_type: str, capabilities: set) -> bool:
-        """Enhanced Samsung TV detection"""
         samsung_tv_indicators = [
-            # Direct name matches
             "samsung" in device_name and "tv" in device_name,
             "samsung" in device_name and any(model in device_name for model in ["au5000", "q70", "qled", "neo"]),
-            # Device type matches
             "tv" in device_type,
             "television" in device_type,
-            # Capability patterns common to Samsung TVs
             {"switch", "audioVolume"}.issubset(capabilities),
             {"switch", "speechSynthesis"}.issubset(capabilities),
         ]
@@ -161,18 +148,15 @@ class SmartThingsEntityFactory:
         return any(samsung_tv_indicators)
 
     def _is_samsung_soundbar(self, device_name: str, device_type: str, capabilities: set) -> bool:
-        """Enhanced Samsung Soundbar detection"""
         samsung_soundbar_indicators = [
-            # Direct name matches
             "samsung" in device_name and "soundbar" in device_name,
             "samsung" in device_name and "q70t" in device_name,
             "samsung" in device_name and "q90r" in device_name,
+            "samsung" in device_name and "q950t" in device_name,
             "soundbar" in device_name,
-            # Device type matches
             "soundbar" in device_type,
             "network audio" in device_type,
             "speaker" in device_type and "samsung" in device_name,
-            # Capability patterns common to Samsung soundbars
             {"audioVolume", "switch"}.issubset(capabilities),
             "audioVolume" in capabilities and "mediaPlayback" not in capabilities,
         ]
@@ -195,7 +179,6 @@ class SmartThingsEntityFactory:
             entity_id = f"st_{device.id}"
             label = device.label or device.name or "Unknown Device"
             
-            # Initialize command tracking for this device
             self.command_in_progress[device.id] = False
             self.command_queue[device.id] = []
             self.last_command_time[device.id] = 0
@@ -356,35 +339,29 @@ class SmartThingsEntityFactory:
             features.extend([MediaFeatures.VOLUME, MediaFeatures.VOLUME_UP_DOWN, MediaFeatures.MUTE_TOGGLE])
         if "mediaPlayback" in device.capabilities:
             features.extend([MediaFeatures.PLAY_PAUSE, MediaFeatures.STOP])
-        # Add source selection feature for devices with input source capability
-        if "mediaInputSource" in device.capabilities or "samsungvd.mediaInputSource" in device.capabilities:
+        if "mediaInputSource" in device.capabilities or "samsungvd.mediaInputSource" in device.capabilities or "samsungvd.audioInputSource" in device.capabilities:
             features.append(MediaFeatures.SELECT_SOURCE)
         
-        # Enhanced device class detection for Samsung devices
         device_class = MediaClasses.SPEAKER
         device_name = (device.label or device.name or "").lower()
         device_type = getattr(device, 'type', '').lower()
         
         if any(word in device_name for word in ["tv", "television"]) or "tv" in device_type:
             device_class = MediaClasses.TV
-        elif any(word in device_name for word in ["soundbar", "q70t", "q90r"]) or "soundbar" in device_type or "network audio" in device_type:
+        elif any(word in device_name for word in ["soundbar", "q70t", "q90r", "q950t"]) or "soundbar" in device_type or "network audio" in device_type:
             device_class = MediaClasses.SPEAKER
         elif any(word in device_name for word in ["receiver", "amplifier"]):
             device_class = MediaClasses.RECEIVER
 
-        # Initialize attributes with default values
         initial_attributes = {MediaAttr.STATE: MediaStates.UNKNOWN}
         
-        # Set available input sources for devices with input capabilities
-        if ("mediaInputSource" in device.capabilities or "samsungvd.mediaInputSource" in device.capabilities):
-            if "samsung" in device_name.lower() and ("soundbar" in device_name.lower() or "q90r" in device_name.lower()):
-                # Samsung soundbar input sources - includes wifi as alias for network
+        if ("mediaInputSource" in device.capabilities or "samsungvd.mediaInputSource" in device.capabilities or "samsungvd.audioInputSource" in device.capabilities):
+            if "samsung" in device_name.lower() and ("soundbar" in device_name.lower() or "q90r" in device_name.lower() or "q950t" in device_name.lower()):
                 initial_attributes[MediaAttr.SOURCE_LIST] = [
                     "HDMI1", "HDMI2", "HDMI3", "HDMI4", "USB", "aux", "bluetooth", "optical", 
-                    "coaxial", "network", "wifi"  # wifi is alias for network
+                    "coaxial", "network", "wifi"
                 ]
             else:
-                # Generic TV/media device input sources
                 initial_attributes[MediaAttr.SOURCE_LIST] = [
                     "HDMI1", "HDMI2", "HDMI3", "HDMI4", "USB", "aux", "bluetooth", "optical"
                 ]
@@ -520,19 +497,21 @@ class SmartThingsEntityFactory:
             if mute_value is not None:
                 entity.attributes[MediaAttr.MUTED] = mute_value == "muted"
         
-        # RESTORED: Enhanced mute status detection for Samsung devices
         if "audioMute" in main_component:
             mute_value = main_component["audioMute"].get("mute", {}).get("value")
             if mute_value is not None:
                 entity.attributes[MediaAttr.MUTED] = mute_value == "muted"
         
-        # RESTORED: Handle current input source - check both capability types
         if "mediaInputSource" in main_component:
             source_value = main_component["mediaInputSource"].get("inputSource", {}).get("value")
             if source_value is not None:
                 entity.attributes[MediaAttr.SOURCE] = str(source_value)
         elif "samsungvd.mediaInputSource" in main_component:
             source_value = main_component["samsungvd.mediaInputSource"].get("inputSource", {}).get("value")
+            if source_value is not None:
+                entity.attributes[MediaAttr.SOURCE] = str(source_value)
+        elif "samsungvd.audioInputSource" in main_component:
+            source_value = main_component["samsungvd.audioInputSource"].get("inputSource", {}).get("value")
             if source_value is not None:
                 entity.attributes[MediaAttr.SOURCE] = str(source_value)
 
@@ -562,21 +541,18 @@ class SmartThingsEntityFactory:
             _LOG.error(f"No client available for command: {entity.name}")
             return StatusCodes.SERVICE_UNAVAILABLE
         
-        # Check if command is already in progress for this device
         if self.command_in_progress.get(device_id, False):
             _LOG.warning(f"Command already in progress for {entity.name}, ignoring new command")
             return StatusCodes.CONFLICT
         
-        # Rate limiting: prevent commands too close together
         now = time.time()
         last_cmd_time = self.last_command_time.get(device_id, 0)
-        if now - last_cmd_time < 0.5:  # Minimum 500ms between commands
+        if now - last_cmd_time < 0.5:
             _LOG.warning(f"Commands too frequent for {entity.name}, ignoring")
             return StatusCodes.CONFLICT
         
         self.last_command_time[device_id] = now
         
-        # CRITICAL FIX: Check device state before input source commands
         if cmd_id == 'select_source' and entity_type == EntityType.MEDIA_PLAYER:
             current_state = entity.attributes.get(MediaAttr.STATE)
             if current_state != MediaStates.ON:
@@ -584,10 +560,8 @@ class SmartThingsEntityFactory:
                 return StatusCodes.BAD_REQUEST
         
         try:
-            # Mark command in progress
             self.command_in_progress[device_id] = True
             
-            # Notify driver to pause polling for this device
             if self.command_callback:
                 self.command_callback(entity.id)
             
@@ -597,7 +571,6 @@ class SmartThingsEntityFactory:
                 _LOG.warning(f"Unhandled command '{cmd_id}' for entity type '{entity_type}'")
                 return StatusCodes.NOT_IMPLEMENTED
             
-            # Execute command synchronously
             async with self.client:
                 command_success = await self.client.execute_command(device_id, capability, command, args)
             
@@ -605,7 +578,6 @@ class SmartThingsEntityFactory:
                 _LOG.error(f"Command failed for {entity.name}: {cmd_id}")
                 return StatusCodes.SERVER_ERROR
             
-            # Wait for device to process command, then verify state
             await self._verify_command_result(entity, device_id, cmd_id)
             
             _LOG.info(f"Command completed successfully: {entity.name} -> {cmd_id}")
@@ -615,18 +587,14 @@ class SmartThingsEntityFactory:
             _LOG.error(f"Command failed for {entity.name}: {e}")
             return StatusCodes.SERVER_ERROR
         finally:
-            # Always clear the in-progress flag
             self.command_in_progress[device_id] = False
 
     async def _verify_command_result(self, entity, device_id: str, cmd_id: str):
-        """Smart verification that respects rate limits - SAFE 0.5s DELAY"""
         try:
-            # Skip verification if we're hitting rate limits - let polling handle it
             if hasattr(self.client, '_last_rate_limit') and time.time() - self.client._last_rate_limit < 30:
                 _LOG.info(f"Skipping verification due to recent rate limit, polling will catch up: {entity.name}")
                 return
                 
-            #  Reduced from 1.5s to 0.5s while maintaining API safety
             await asyncio.sleep(0.5)
             
             try:
@@ -648,7 +616,6 @@ class SmartThingsEntityFactory:
             except Exception as e:
                 if "409" in str(e):
                     _LOG.info(f"Rate limited during verification for {entity.name}, polling will catch up")
-                    # Mark rate limit so future commands can skip verification
                     self.client._last_rate_limit = time.time()
                 else:
                     _LOG.warning(f"Verification failed for {entity.name}: {e}")
@@ -723,7 +690,6 @@ class SmartThingsEntityFactory:
                     capability, command = 'switch', 'off'
                 else:
                     capability, command = 'switch', 'on'
-            # Add volume control commands
             elif cmd_id == 'volume_up':
                 if "audioVolume" in capabilities:
                     capability, command = 'audioVolume', 'volumeUp'
@@ -734,7 +700,6 @@ class SmartThingsEntityFactory:
                 current_muted = entity.attributes.get(MediaAttr.MUTED, False)
                 _LOG.info(f"Mute toggle: current muted state = {current_muted}")
                 
-                # Priority 1: Use dedicated audioMute capability if available
                 if "audioMute" in capabilities:
                     if current_muted:
                         capability, command = 'audioMute', 'unmute'
@@ -742,7 +707,6 @@ class SmartThingsEntityFactory:
                     else:
                         capability, command = 'audioMute', 'mute'
                         _LOG.info(f"Using audioMute.mute for {entity.name}")
-                # Priority 2: Fall back to audioVolume capability
                 elif "audioVolume" in capabilities:
                     if current_muted:
                         capability, command = 'audioVolume', 'unmute'
@@ -756,7 +720,6 @@ class SmartThingsEntityFactory:
             elif cmd_id == 'select_source':
                 source_param = params.get('source')
                 if source_param:
-                    # Handle wifi -> network mapping for Samsung soundbars
                     if source_param.lower() == 'wifi':
                         _LOG.info(f"Converting 'wifi' to 'network' for Samsung soundbar")
                         source_param = 'network'
@@ -769,6 +732,10 @@ class SmartThingsEntityFactory:
                         capability, command = 'samsungvd.mediaInputSource', 'setInputSource'
                         args = [source_param]
                         _LOG.info(f"Setting Samsung VD input source to: {source_param}")
+                    elif "samsungvd.audioInputSource" in capabilities:
+                        capability, command = 'samsungvd.audioInputSource', 'setInputSource'
+                        args = [source_param]
+                        _LOG.info(f"Setting Samsung audio input source to: {source_param}")
                     else:
                         _LOG.warning(f"No input source capability found for {entity.name}")
         

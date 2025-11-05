@@ -40,7 +40,6 @@ class SmartThingsEntityFactory:
         self.command_queue = {}
         self.last_command_time = {}
         self.command_callback = None
-        self.source_cycling_active = {}
 
     def determine_entity_type(self, device: SmartThingsDevice) -> Optional[str]:
         capabilities = device.capabilities
@@ -346,7 +345,27 @@ class SmartThingsEntityFactory:
             
             main_component = device_status.get("components", {}).get("main", {})
             
-            # Try samsungvd.audioInputSource first (for soundbars)
+            if "samsungvd.soundFrom" in main_component:
+                sound_from = main_component["samsungvd.soundFrom"]
+                supported = sound_from.get("supportedSoundFrom", {}).get("value", [])
+                if supported:
+                    _LOG.info(f"✅ Found {len(supported)} supported inputs from samsungvd.soundFrom: {supported}")
+                    return supported
+            
+            if "samsungvd.audioSoundFrom" in main_component:
+                audio_sound_from = main_component["samsungvd.audioSoundFrom"]
+                supported = audio_sound_from.get("supportedSoundFrom", {}).get("value", [])
+                if supported:
+                    _LOG.info(f"✅ Found {len(supported)} supported inputs from samsungvd.audioSoundFrom: {supported}")
+                    return supported
+            
+            if "sound" in main_component:
+                sound = main_component["sound"]
+                supported = sound.get("supportedSoundFrom", {}).get("value", [])
+                if supported:
+                    _LOG.info(f"✅ Found {len(supported)} supported inputs from sound: {supported}")
+                    return supported
+            
             if "samsungvd.audioInputSource" in main_component:
                 audio_input_source = main_component["samsungvd.audioInputSource"]
                 supported = audio_input_source.get("supportedInputSources", {}).get("value", [])
@@ -354,7 +373,6 @@ class SmartThingsEntityFactory:
                     _LOG.info(f"✅ Found {len(supported)} supported inputs from samsungvd.audioInputSource: {supported}")
                     return supported
             
-            # Try mediaInputSource (for TVs)
             if "mediaInputSource" in main_component:
                 media_input_source = main_component["mediaInputSource"]
                 supported = media_input_source.get("supportedInputSources", {}).get("value", [])
@@ -362,7 +380,6 @@ class SmartThingsEntityFactory:
                     _LOG.info(f"✅ Found {len(supported)} supported inputs from mediaInputSource: {supported}")
                     return supported
             
-            # Try samsungvd.mediaInputSource
             if "samsungvd.mediaInputSource" in main_component:
                 samsung_input_source = main_component["samsungvd.mediaInputSource"]
                 supported = samsung_input_source.get("supportedInputSources", {}).get("value", [])
@@ -370,7 +387,7 @@ class SmartThingsEntityFactory:
                     _LOG.info(f"✅ Found {len(supported)} supported inputs from samsungvd.mediaInputSource: {supported}")
                     return supported
             
-            _LOG.warning(f"No supportedInputSources found in device status")
+            _LOG.warning(f"No supportedInputSources or supportedSoundFrom found in device status")
             return []
             
         except Exception as e:
@@ -386,7 +403,17 @@ class SmartThingsEntityFactory:
             features.extend([MediaFeatures.VOLUME, MediaFeatures.VOLUME_UP_DOWN, MediaFeatures.MUTE_TOGGLE])
         if "mediaPlayback" in device.capabilities:
             features.extend([MediaFeatures.PLAY_PAUSE, MediaFeatures.STOP])
-        if "mediaInputSource" in device.capabilities or "samsungvd.mediaInputSource" in device.capabilities or "samsungvd.audioInputSource" in device.capabilities:
+        
+        has_input_capability = (
+            "sound" in device.capabilities or
+            "samsungvd.soundFrom" in device.capabilities or
+            "samsungvd.audioSoundFrom" in device.capabilities or
+            "mediaInputSource" in device.capabilities or
+            "samsungvd.mediaInputSource" in device.capabilities or
+            "samsungvd.audioInputSource" in device.capabilities
+        )
+        
+        if has_input_capability:
             features.append(MediaFeatures.SELECT_SOURCE)
         
         device_class = MediaClasses.SPEAKER
@@ -402,14 +429,16 @@ class SmartThingsEntityFactory:
 
         initial_attributes = {MediaAttr.STATE: MediaStates.UNKNOWN}
         
-        # FIX: Fetch actual supported inputs dynamically instead of hardcoding
-        if ("mediaInputSource" in device.capabilities or "samsungvd.mediaInputSource" in device.capabilities or "samsungvd.audioInputSource" in device.capabilities):
-            # Create a task to fetch supported inputs asynchronously
-            # For now, use a reasonable default that will be updated on first status poll
-            initial_attributes[MediaAttr.SOURCE_LIST] = [
-                "HDMI1", "HDMI2", "digital", "bluetooth", "wifi"
-            ]
-            _LOG.info(f"Will fetch actual supported inputs for {name} during first status update")
+        if has_input_capability:
+            loop = asyncio.get_event_loop()
+            supported_inputs = loop.run_until_complete(self._get_supported_input_sources(device_data))
+            
+            if supported_inputs:
+                initial_attributes[MediaAttr.SOURCE_LIST] = supported_inputs
+                _LOG.info(f"✅ Loaded {len(supported_inputs)} actual inputs for {name}: {supported_inputs}")
+            else:
+                initial_attributes[MediaAttr.SOURCE_LIST] = ["HDMI1", "HDMI2", "digital", "bluetooth", "wifi"]
+                _LOG.warning(f"⚠️ Using fallback source list for {name} - could not fetch actual inputs")
         
         return MediaPlayer(entity_id, name, features, initial_attributes, device_class=device_class, area=area, cmd_handler=self._handle_command)
 
@@ -528,13 +557,11 @@ class SmartThingsEntityFactory:
         entity.attributes[ButtonAttr.STATE] = ButtonStates.AVAILABLE
 
     def _update_media_player_attributes(self, entity: MediaPlayer, main_component: Dict[str, Any]):
-        # Update power state
         if "switch" in main_component:
             switch_value = main_component["switch"].get("switch", {}).get("value")
             if switch_value:
                 entity.attributes[MediaAttr.STATE] = MediaStates.ON if switch_value == "on" else MediaStates.OFF
         
-        # Update volume
         if "audioVolume" in main_component:
             volume_value = main_component["audioVolume"].get("volume", {}).get("value")
             if volume_value is not None:
@@ -549,45 +576,39 @@ class SmartThingsEntityFactory:
             if mute_value is not None:
                 entity.attributes[MediaAttr.MUTED] = mute_value == "muted"
         
-        # FIX: Update current source AND supported source list dynamically
-        if "samsungvd.audioInputSource" in main_component:
-            audio_input = main_component["samsungvd.audioInputSource"]
-            
-            # Current source
-            current_source = audio_input.get("inputSource", {}).get("value")
-            if current_source is not None:
+        if "samsungvd.soundFrom" in main_component:
+            sound_from = main_component["samsungvd.soundFrom"]
+            current_source = sound_from.get("soundFrom", {}).get("value")
+            if current_source:
                 entity.attributes[MediaAttr.SOURCE] = str(current_source)
-                _LOG.debug(f"Updated current source to: {current_source}")
-            
-            # Supported sources - CRITICAL FIX
-            supported_sources = audio_input.get("supportedInputSources", {}).get("value", [])
-            if supported_sources:
-                entity.attributes[MediaAttr.SOURCE_LIST] = supported_sources
-                _LOG.info(f"✅ Updated SOURCE_LIST from device: {supported_sources}")
+                _LOG.debug(f"Current source from samsungvd.soundFrom: {current_source}")
+        
+        elif "samsungvd.audioSoundFrom" in main_component:
+            audio_sound_from = main_component["samsungvd.audioSoundFrom"]
+            current_source = audio_sound_from.get("soundFrom", {}).get("value")
+            if current_source:
+                entity.attributes[MediaAttr.SOURCE] = str(current_source)
+                _LOG.debug(f"Current source from samsungvd.audioSoundFrom: {current_source}")
+        
+        elif "sound" in main_component:
+            sound = main_component["sound"]
+            current_source = sound.get("soundFrom", {}).get("value")
+            if current_source:
+                entity.attributes[MediaAttr.SOURCE] = str(current_source)
+                _LOG.debug(f"Current source from sound: {current_source}")
         
         elif "mediaInputSource" in main_component:
-            media_input = main_component["mediaInputSource"]
-            
-            source_value = media_input.get("inputSource", {}).get("value")
+            source_value = main_component["mediaInputSource"].get("inputSource", {}).get("value")
             if source_value is not None:
                 entity.attributes[MediaAttr.SOURCE] = str(source_value)
-            
-            supported_sources = media_input.get("supportedInputSources", {}).get("value", [])
-            if supported_sources:
-                entity.attributes[MediaAttr.SOURCE_LIST] = supported_sources
-                _LOG.info(f"✅ Updated SOURCE_LIST from device: {supported_sources}")
-        
         elif "samsungvd.mediaInputSource" in main_component:
-            samsung_input = main_component["samsungvd.mediaInputSource"]
-            
-            source_value = samsung_input.get("inputSource", {}).get("value")
+            source_value = main_component["samsungvd.mediaInputSource"].get("inputSource", {}).get("value")
             if source_value is not None:
                 entity.attributes[MediaAttr.SOURCE] = str(source_value)
-            
-            supported_sources = samsung_input.get("supportedInputSources", {}).get("value", [])
-            if supported_sources:
-                entity.attributes[MediaAttr.SOURCE_LIST] = supported_sources
-                _LOG.info(f"✅ Updated SOURCE_LIST from device: {supported_sources}")
+        elif "samsungvd.audioInputSource" in main_component:
+            source_value = main_component["samsungvd.audioInputSource"].get("inputSource", {}).get("value")
+            if source_value is not None:
+                entity.attributes[MediaAttr.SOURCE] = str(source_value)
 
     def _update_climate_attributes(self, entity: Climate, main_component: Dict[str, Any]):
         if "thermostat" in main_component:
@@ -641,91 +662,6 @@ class SmartThingsEntityFactory:
             
             capability, command, args = self._map_command(entity_type, cmd_id, params, entity, capabilities)
             
-            # FIX: Enhanced cycling logic using ACTUAL device source list
-            if cmd_id == 'select_source' and capability == 'samsungvd.audioInputSource' and command == 'setNextInputSource':
-                self.source_cycling_active[device_id] = True
-                
-                target_input = params.get('source')
-                supported_inputs = entity.attributes.get(MediaAttr.SOURCE_LIST, [])
-                
-                _LOG.info(f"🔄 Samsung soundbar source cycling: {entity.name} to '{target_input}'")
-                _LOG.info(f"📋 Supported inputs: {supported_inputs}")
-                
-                if not supported_inputs:
-                    _LOG.error(f"❌ No SOURCE_LIST available for {entity.name}")
-                    self.source_cycling_active[device_id] = False
-                    return StatusCodes.BAD_REQUEST
-                
-                if target_input not in supported_inputs:
-                    _LOG.error(f"❌ Target '{target_input}' not in supported list: {supported_inputs}")
-                    self.source_cycling_active[device_id] = False
-                    return StatusCodes.BAD_REQUEST
-                
-                max_attempts = len(supported_inputs) + 2  # Full cycle + buffer
-                attempt = 0
-                cycle_delay = 3.5  # Slightly longer delay for reliability
-                
-                async with self.client:
-                    await asyncio.sleep(1.5)
-                    
-                    while attempt < max_attempts:
-                        attempt += 1
-                        
-                        try:
-                            device_status = await self.client.get_device_status(device_id)
-                            if device_status:
-                                main_component = device_status.get("components", {}).get("main", {})
-                                audio_input = main_component.get("samsungvd.audioInputSource", {})
-                                current_input = audio_input.get("inputSource", {}).get("value")
-                                
-                                _LOG.info(f"🔍 Attempt {attempt}/{max_attempts}: Current='{current_input}', Target='{target_input}'")
-                                
-                                if current_input == target_input:
-                                    _LOG.info(f"✅ Reached target '{target_input}'!")
-                                    entity.attributes[MediaAttr.SOURCE] = target_input
-                                    self.api.configured_entities.update_attributes(entity.id, entity.attributes)
-                                    self.source_cycling_active[device_id] = False
-                                    return StatusCodes.OK
-                            else:
-                                _LOG.warning(f"⚠️ No status data on attempt {attempt}")
-                        except Exception as e:
-                            _LOG.warning(f"⚠️ Status check failed on attempt {attempt}: {e}")
-                        
-                        _LOG.info(f"🔄 Cycling attempt {attempt}/{max_attempts}")
-                        
-                        success = await self.client.execute_command(
-                            device_id,
-                            'samsungvd.audioInputSource',
-                            'setNextInputSource',
-                            []
-                        )
-                        
-                        if not success:
-                            _LOG.error(f"❌ Cycle command failed on attempt {attempt}")
-                            self.source_cycling_active[device_id] = False
-                            return StatusCodes.SERVER_ERROR
-                        
-                        await asyncio.sleep(cycle_delay)
-                    
-                    _LOG.error(f"❌ Failed to reach '{target_input}' after {max_attempts} attempts")
-                    
-                    try:
-                        await asyncio.sleep(1.0)
-                        device_status = await self.client.get_device_status(device_id)
-                        if device_status:
-                            main_component = device_status.get("components", {}).get("main", {})
-                            audio_input = main_component.get("samsungvd.audioInputSource", {})
-                            final_input = audio_input.get("inputSource", {}).get("value")
-                            if final_input:
-                                entity.attributes[MediaAttr.SOURCE] = final_input
-                                self.api.configured_entities.update_attributes(entity.id, entity.attributes)
-                                _LOG.warning(f"⚠️ Stopped at '{final_input}' instead of '{target_input}'")
-                    except Exception as e:
-                        _LOG.error(f"Could not update final state: {e}")
-                    
-                    self.source_cycling_active[device_id] = False
-                    return StatusCodes.SERVER_ERROR
-            
             if not capability or not command:
                 _LOG.warning(f"Unhandled command '{cmd_id}' for entity type '{entity_type}'")
                 return StatusCodes.NOT_IMPLEMENTED
@@ -747,8 +683,6 @@ class SmartThingsEntityFactory:
             return StatusCodes.SERVER_ERROR
         finally:
             self.command_in_progress[device_id] = False
-            if device_id in self.source_cycling_active:
-                self.source_cycling_active[device_id] = False
 
     async def _verify_command_result(self, entity, device_id: str, cmd_id: str):
         try:
@@ -881,19 +815,26 @@ class SmartThingsEntityFactory:
             elif cmd_id == 'select_source':
                 source_param = params.get('source')
                 if source_param:
-                    # FIX: Use setNextInputSource for Samsung soundbars with audioInputSource
-                    if "samsungvd.audioInputSource" in capabilities:
-                        capability, command = 'samsungvd.audioInputSource', 'setNextInputSource'
-                        args = []
-                        _LOG.info(f"🔄 Will cycle to input source: {source_param}")
+                    if "samsungvd.soundFrom" in capabilities:
+                        capability, command = 'samsungvd.soundFrom', 'setSoundFrom'
+                        args = [source_param]
+                        _LOG.info(f"Using samsungvd.soundFrom.setSoundFrom: {source_param}")
+                    elif "samsungvd.audioSoundFrom" in capabilities:
+                        capability, command = 'samsungvd.audioSoundFrom', 'setSoundFrom'
+                        args = [source_param]
+                        _LOG.info(f"Using samsungvd.audioSoundFrom.setSoundFrom: {source_param}")
+                    elif "sound" in capabilities:
+                        capability, command = 'sound', 'setSoundFrom'
+                        args = [source_param]
+                        _LOG.info(f"Using sound.setSoundFrom: {source_param}")
                     elif "mediaInputSource" in capabilities:
                         capability, command = 'mediaInputSource', 'setInputSource'
                         args = [source_param]
-                        _LOG.info(f"Setting input source to: {source_param}")
+                        _LOG.info(f"Using mediaInputSource.setInputSource: {source_param}")
                     elif "samsungvd.mediaInputSource" in capabilities:
                         capability, command = 'samsungvd.mediaInputSource', 'setInputSource'
                         args = [source_param]
-                        _LOG.info(f"Setting Samsung VD input source to: {source_param}")
+                        _LOG.info(f"Using samsungvd.mediaInputSource.setInputSource: {source_param}")
                     else:
                         _LOG.warning(f"No input source capability found for {entity.name}")
         

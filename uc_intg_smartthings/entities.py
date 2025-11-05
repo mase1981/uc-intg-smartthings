@@ -1,4 +1,5 @@
 """
+:Entities execution file
 :copyright: (c) 2025 by Meir Miyara
 :license: MPL-2.0, see LICENSE for more details.
 """
@@ -155,8 +156,8 @@ class SmartThingsEntityFactory:
             "samsung" in device_name and "q950t" in device_name,
             "soundbar" in device_name,
             "soundbar" in device_type,
-            "network audio" in device_type,
             "speaker" in device_type and "samsung" in device_name,
+            "network audio" in device_type,
             {"audioVolume", "switch"}.issubset(capabilities),
             "audioVolume" in capabilities and "mediaPlayback" not in capabilities,
         ]
@@ -460,7 +461,7 @@ class SmartThingsEntityFactory:
             temp_value = main_component["temperatureMeasurement"].get("temperature", {}).get("value")
             if temp_value is not None:
                 entity.attributes[SensorAttr.VALUE] = round(float(temp_value), 1)
-                entity.attributes[SensorAttr.UNIT] = "Â°C"
+                entity.attributes[SensorAttr.UNIT] = "°C"
         elif "battery" in main_component:
             battery_value = main_component["battery"].get("battery", {}).get("value")
             if battery_value is not None:
@@ -502,7 +503,17 @@ class SmartThingsEntityFactory:
             if mute_value is not None:
                 entity.attributes[MediaAttr.MUTED] = mute_value == "muted"
         
-        if "mediaInputSource" in main_component:
+        if "samsungvd.audioInputSource" in main_component:
+            audio_input = main_component["samsungvd.audioInputSource"]
+            
+            source_value = audio_input.get("inputSource", {}).get("value")
+            if source_value is not None:
+                entity.attributes[MediaAttr.SOURCE] = str(source_value)
+            
+            supported_sources = audio_input.get("supportedInputSources", {}).get("value")
+            if supported_sources:
+                entity.attributes[MediaAttr.SOURCE_LIST] = supported_sources
+        elif "mediaInputSource" in main_component:
             source_value = main_component["mediaInputSource"].get("inputSource", {}).get("value")
             if source_value is not None:
                 entity.attributes[MediaAttr.SOURCE] = str(source_value)
@@ -510,15 +521,6 @@ class SmartThingsEntityFactory:
             source_value = main_component["samsungvd.mediaInputSource"].get("inputSource", {}).get("value")
             if source_value is not None:
                 entity.attributes[MediaAttr.SOURCE] = str(source_value)
-        elif "samsungvd.audioInputSource" in main_component:
-            source_value = main_component["samsungvd.audioInputSource"].get("inputSource", {}).get("value")
-            if source_value is not None:
-                entity.attributes[MediaAttr.SOURCE] = str(source_value)
-            
-            supported_sources = main_component["samsungvd.audioInputSource"].get("supportedInputSources", {}).get("value")
-            if supported_sources and isinstance(supported_sources, list):
-                entity.attributes[MediaAttr.SOURCE_LIST] = supported_sources
-                _LOG.debug(f"Loaded SOURCE_LIST for {entity.name}: {supported_sources}")
 
     def _update_climate_attributes(self, entity: Climate, main_component: Dict[str, Any]):
         if "thermostat" in main_component:
@@ -574,10 +576,9 @@ class SmartThingsEntityFactory:
             
             if cmd_id == 'select_source' and capability == 'samsungvd.audioInputSource' and command == 'setNextInputSource':
                 target_input = params.get('source')
-                current_input = entity.attributes.get(MediaAttr.SOURCE)
                 supported_inputs = entity.attributes.get(MediaAttr.SOURCE_LIST, [])
                 
-                _LOG.info(f"Smart cycling: {entity.name} from '{current_input}' to '{target_input}'")
+                _LOG.info(f"Smart cycling with verification: {entity.name} to '{target_input}'")
                 
                 if not supported_inputs:
                     _LOG.error(f"No SOURCE_LIST available for {entity.name}")
@@ -587,29 +588,33 @@ class SmartThingsEntityFactory:
                     _LOG.error(f"Target '{target_input}' not in supported list: {supported_inputs}")
                     return StatusCodes.BAD_REQUEST
                 
-                if current_input not in supported_inputs:
-                    _LOG.warning(f"Current input '{current_input}' not in list, starting from first")
-                    current_index = 0
-                else:
-                    current_index = supported_inputs.index(current_input)
-                
-                target_index = supported_inputs.index(target_input)
-                
-                if current_index == target_index:
-                    _LOG.info(f"Already on target input '{target_input}'")
-                    return StatusCodes.OK
-                
-                num_inputs = len(supported_inputs)
-                if target_index > current_index:
-                    cycles_needed = target_index - current_index
-                else:
-                    cycles_needed = (num_inputs - current_index) + target_index
-                
-                _LOG.info(f"Need {cycles_needed} cycles to reach '{target_input}'")
+                max_attempts = 10
+                attempt = 0
                 
                 async with self.client:
-                    for i in range(cycles_needed):
-                        _LOG.info(f"Cycle {i+1}/{cycles_needed}: setNextInputSource")
+                    while attempt < max_attempts:
+                        attempt += 1
+                        
+                        try:
+                            device_status = await self.client.get_device_status(device_id)
+                            if device_status:
+                                main_component = device_status.get("components", {}).get("main", {})
+                                audio_input = main_component.get("samsungvd.audioInputSource", {})
+                                current_input = audio_input.get("inputSource", {}).get("value")
+                                
+                                _LOG.info(f"Attempt {attempt}/{max_attempts}: Currently on '{current_input}', target is '{target_input}'")
+                                
+                                if current_input == target_input:
+                                    _LOG.info(f"✅ SUCCESS: Already on target input '{target_input}'")
+                                    entity.attributes[MediaAttr.SOURCE] = target_input
+                                    self.api.configured_entities.update_attributes(entity.id, entity.attributes)
+                                    return StatusCodes.OK
+                            else:
+                                _LOG.warning(f"Could not get current input state on attempt {attempt}")
+                        except Exception as e:
+                            _LOG.warning(f"Failed to check current input on attempt {attempt}: {e}")
+                        
+                        _LOG.info(f"Cycling: setNextInputSource (attempt {attempt}/{max_attempts})")
                         
                         success = await self.client.execute_command(
                             device_id,
@@ -619,38 +624,27 @@ class SmartThingsEntityFactory:
                         )
                         
                         if not success:
-                            _LOG.error(f"Cycle {i+1} failed")
+                            _LOG.error(f"Cycle command failed on attempt {attempt}")
                             return StatusCodes.SERVER_ERROR
                         
-                        if i < cycles_needed - 1:
-                            await asyncio.sleep(1.0)
-                
-                await asyncio.sleep(0.5)
-                
-                try:
-                    async with self.client:
+                        await asyncio.sleep(1.8)
+                    
+                    _LOG.error(f"Failed to reach target '{target_input}' after {max_attempts} attempts")
+                    
+                    try:
                         device_status = await self.client.get_device_status(device_id)
-                    if device_status:
-                        main_component = device_status.get("components", {}).get("main", {})
-                        audio_input = main_component.get("samsungvd.audioInputSource", {})
-                        final_input = audio_input.get("inputSource", {}).get("value")
-                        
-                        if final_input == target_input:
-                            _LOG.info(f"✅ Successfully cycled to '{target_input}'")
-                            entity.attributes[MediaAttr.SOURCE] = target_input
-                            self.api.configured_entities.update_attributes(entity.id, entity.attributes)
-                            return StatusCodes.OK
-                        else:
-                            _LOG.warning(f"Expected '{target_input}', got '{final_input}'")
+                        if device_status:
+                            main_component = device_status.get("components", {}).get("main", {})
+                            audio_input = main_component.get("samsungvd.audioInputSource", {})
+                            final_input = audio_input.get("inputSource", {}).get("value")
                             if final_input:
                                 entity.attributes[MediaAttr.SOURCE] = final_input
                                 self.api.configured_entities.update_attributes(entity.id, entity.attributes)
-                            return StatusCodes.OK
-                except Exception as e:
-                    _LOG.warning(f"Could not verify final state: {e}")
-                    entity.attributes[MediaAttr.SOURCE] = target_input
-                    self.api.configured_entities.update_attributes(entity.id, entity.attributes)
-                    return StatusCodes.OK
+                                _LOG.warning(f"Stopped at '{final_input}' instead of '{target_input}'")
+                    except Exception as e:
+                        _LOG.error(f"Could not update final state: {e}")
+                    
+                    return StatusCodes.SERVER_ERROR
             
             if not capability or not command:
                 _LOG.warning(f"Unhandled command '{cmd_id}' for entity type '{entity_type}'")

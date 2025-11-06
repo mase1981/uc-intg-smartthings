@@ -350,12 +350,17 @@ class SmartThingsEntityFactory:
             "samsungvd.audioInputSource" in device.capabilities
         )
         
-        if has_input_capability:
+        # HARDCODED: Q950T only supports cycling, not direct source selection
+        device_name = (device.label or device.name or "").lower()
+        is_q950t = "q950t" in device_name or "q950" in device_name
+        
+        if has_input_capability and not is_q950t:
             features.append(MediaFeatures.SELECT_SOURCE)
             _LOG.info(f"✅ Added SELECT_SOURCE feature for {name}")
+        elif is_q950t:
+            _LOG.info(f"🔄 {name}: Cycling-only device, skipping SELECT_SOURCE")
         
         device_class = MediaClasses.SPEAKER
-        device_name = (device.label or device.name or "").lower()
         device_type = getattr(device, 'type', '').lower()
         
         if any(word in device_name for word in ["tv", "television"]) or "tv" in device_type:
@@ -401,6 +406,25 @@ class SmartThingsEntityFactory:
     async def discover_input_mode(self, entity, device_id: str) -> None:
         try:
             _LOG.info(f"🔍 Discovering input mode for {entity.name}")
+            
+            # HARDCODED: Q950T only supports cycling, not direct input
+            device_name_lower = entity.name.lower()
+            if "q950t" in device_name_lower or "q950" in device_name_lower:
+                _LOG.info(f"🔄 {entity.name}: Hardcoded as CYCLING-ONLY (Q950T model)")
+                self.device_input_mode[device_id] = "cycling"
+                
+                async with self.client:
+                    device_status = await self.client.get_device_status(device_id)
+                
+                if device_status:
+                    main_component = device_status.get("components", {}).get("main", {})
+                    if "samsungvd.audioInputSource" in main_component:
+                        supported_values = main_component["samsungvd.audioInputSource"].get("supportedInputSources", {}).get("value", [])
+                        if supported_values:
+                            entity.attributes[MediaAttr.SOURCE_LIST] = supported_values
+                            self.api.configured_entities.update_attributes(entity.id, entity.attributes)
+                            _LOG.info(f"✅ Updated SOURCE_LIST for Q950T: {supported_values}")
+                return
             
             async with self.client:
                 device_full = await self.client._make_request("GET", f"/devices/{device_id}")
@@ -792,26 +816,55 @@ class SmartThingsEntityFactory:
     async def _direct_input_selection(self, entity, device_id: str, target_input: str, capabilities: set) -> StatusCodes:
         capability = None
         command = None
-        args = [target_input]
+        args = None
+        
+        # Get the SOURCE_LIST to find the index of the target input
+        source_list = entity.attributes.get(MediaAttr.SOURCE_LIST, [])
+        
+        # Determine which capability to use and whether it needs index or string
+        uses_index = False  # Flag to indicate if capability needs integer index
         
         if "samsungvd.soundFrom" in capabilities:
             capability, command = 'samsungvd.soundFrom', 'setSoundFrom'
-            _LOG.info(f"Using samsungvd.soundFrom.setSoundFrom: {target_input}")
+            uses_index = True
+            _LOG.info(f"Using samsungvd.soundFrom.setSoundFrom for {entity.name}")
         elif "samsungvd.audioSoundFrom" in capabilities:
             capability, command = 'samsungvd.audioSoundFrom', 'setSoundFrom'
-            _LOG.info(f"Using samsungvd.audioSoundFrom.setSoundFrom: {target_input}")
+            uses_index = True
+            _LOG.info(f"Using samsungvd.audioSoundFrom.setSoundFrom for {entity.name}")
         elif "sound" in capabilities:
             capability, command = 'sound', 'setSoundFrom'
-            _LOG.info(f"Using sound.setSoundFrom: {target_input}")
+            uses_index = True
+            _LOG.info(f"Using sound.setSoundFrom for {entity.name}")
         elif "mediaInputSource" in capabilities:
             capability, command = 'mediaInputSource', 'setInputSource'
-            _LOG.info(f"Using mediaInputSource.setInputSource: {target_input}")
+            uses_index = False
+            _LOG.info(f"Using mediaInputSource.setInputSource for {entity.name}")
         elif "samsungvd.mediaInputSource" in capabilities:
             capability, command = 'samsungvd.mediaInputSource', 'setInputSource'
-            _LOG.info(f"Using samsungvd.mediaInputSource.setInputSource: {target_input}")
+            uses_index = False
+            _LOG.info(f"Using samsungvd.mediaInputSource.setInputSource for {entity.name}")
         else:
             _LOG.warning(f"No direct input capability found for {entity.name}")
             return StatusCodes.NOT_IMPLEMENTED
+        
+        # Convert source name to index if capability requires it
+        if uses_index:
+            if not source_list:
+                _LOG.error(f"No SOURCE_LIST available for {entity.name} - cannot convert {target_input} to index")
+                return StatusCodes.SERVER_ERROR
+            
+            try:
+                source_index = source_list.index(target_input)
+                args = [source_index]
+                _LOG.info(f"✅ {entity.name}: Converted '{target_input}' to index {source_index} (SOURCE_LIST: {source_list})")
+            except ValueError:
+                _LOG.error(f"❌ {entity.name}: Source '{target_input}' not found in SOURCE_LIST: {source_list}")
+                return StatusCodes.BAD_REQUEST
+        else:
+            # For capabilities that use string arguments
+            args = [target_input]
+            _LOG.info(f"✅ {entity.name}: Using string argument '{target_input}'")
         
         async with self.client:
             command_success = await self.client.execute_command(device_id, capability, command, args)
@@ -820,6 +873,7 @@ class SmartThingsEntityFactory:
             _LOG.error(f"Direct input selection failed for {entity.name}")
             return StatusCodes.SERVER_ERROR
         
+        _LOG.info(f"✅ {entity.name}: Successfully sent {capability}.{command} with args {args}")
         await self._verify_command_result(entity, device_id, 'select_source')
         return StatusCodes.OK
 

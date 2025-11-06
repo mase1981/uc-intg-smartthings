@@ -32,7 +32,6 @@ class SmartThingsIntegration:
         self.setup_flow = SmartThingsSetupFlow(api, self.config_manager)
         self.status_update_task: Optional[asyncio.Task] = None
 
-        # RACE CONDITION FIX: Track initialization state
         self.entities_ready = False
         self.initialization_lock = asyncio.Lock()
 
@@ -72,50 +71,43 @@ class SmartThingsIntegration:
                 _LOG.error("Client or factory not available during subscription")
                 return
 
-            # RACE CONDITION FIX: Ensure entities are ready before subscription
             if not self.entities_ready:
                 _LOG.error("RACE CONDITION DETECTED: Subscription before entities ready!")
                 await self._initialize_integration()
 
             self.subscribed_entities = {eid for eid in entity_ids if eid.startswith("st_")}
 
-            # FIXED: Ensure client session is ready before syncing state
             await self._ensure_client_ready()
             await self._sync_initial_state_immediate(list(self.subscribed_entities))
+            await self._discover_input_modes(list(self.subscribed_entities))
             await self._start_polling()
 
     async def setup_handler(self, msg: SetupDriver) -> Any:
         setup_result = await self.setup_flow.handle_setup_request(msg)
         if isinstance(setup_result, uc.SetupComplete):
             _LOG.info("OAuth2 setup complete. Initializing integration immediately.")
-            # RACE CONDITION FIX: Initialize immediately after setup
             await self._initialize_integration()
         return setup_result
 
     async def _ensure_client_ready(self):
-        """Ensure client session is properly initialized and ready for use"""
         if not self.client:
             _LOG.error("No client available - cannot ensure readiness")
             return
             
         try:
-            # Force session recreation if closed
             if self.client._session and self.client._session.closed:
                 _LOG.info("Client session was closed, forcing recreation")
                 await self.client.close()
                 
-            # Ensure session is created
             if not self.client._session or self.client._session.closed:
                 _LOG.info("Creating new client session for state sync")
                 async with self.client:
-                    # Just entering context manager creates session
                     pass
                     
         except Exception as e:
             _LOG.error(f"Error ensuring client readiness: {e}")
 
     async def _initialize_integration(self):
-        """RACE CONDITION FIX: Atomic entity creation before UC Remote subscription attempts"""
         async with self.initialization_lock:
             if self.entities_ready:
                 _LOG.debug("Entities already initialized, skipping")
@@ -128,7 +120,6 @@ class SmartThingsIntegration:
                 await self.api.set_device_state(DeviceStates.CONNECTING)
                 self.config = self.config_manager.load_config()
                 
-                # OAuth2 authentication with client credentials
                 client_id = self.config.get("client_id")
                 client_secret = self.config.get("client_secret")
                 oauth2_tokens = self.config.get("oauth2_tokens")
@@ -143,7 +134,6 @@ class SmartThingsIntegration:
                     await self.api.set_device_state(DeviceStates.ERROR)
                     return
                 
-                # Initialize client with OAuth2 credentials and tokens
                 try:
                     tokens = OAuth2TokenData.from_dict(oauth2_tokens)
                     self.client = SmartThingsClient(
@@ -160,35 +150,30 @@ class SmartThingsIntegration:
                 self.factory = SmartThingsEntityFactory(self.client, self.api)
                 self.factory.command_callback = self.track_device_command
 
-                # CRITICAL: Create ALL entities BEFORE marking ready
                 await self._create_entities()
                 
-                # RACE CONDITION FIX: Mark entities ready BEFORE setting CONNECTED
                 self.entities_ready = True
                 _LOG.info("All entities created and ready - safe for UC Remote subscription")
 
-                # Now safe for UC Remote to connect and subscribe
                 await self.api.set_device_state(DeviceStates.CONNECTED)
                 _LOG.info("SmartThings OAuth2 integration initialized successfully")
 
-                # Update config with any refreshed tokens
                 await self._save_updated_tokens()
 
             except SmartThingsOAuth2Error as e:
                 _LOG.error(f"OAuth2 authentication failed: {e}")
                 await self.api.set_device_state(DeviceStates.ERROR)
-                self.entities_ready = False  # Ensure failure state
+                self.entities_ready = False
             except SmartThingsAPIError as e:
                 _LOG.error(f"SmartThings API error: {e}")
                 await self.api.set_device_state(DeviceStates.ERROR)
-                self.entities_ready = False  # Ensure failure state
+                self.entities_ready = False
             except Exception as e:
                 _LOG.error(f"Failed to initialize integration: {e}", exc_info=True)
                 await self.api.set_device_state(DeviceStates.ERROR)
-                self.entities_ready = False  # Ensure failure state
+                self.entities_ready = False
 
     async def _save_updated_tokens(self):
-        """Save any updated OAuth2 tokens back to config"""
         try:
             if self.client and self.client.get_oauth_tokens():
                 updated_tokens = self.client.get_oauth_tokens().to_dict()
@@ -200,7 +185,6 @@ class SmartThingsIntegration:
             _LOG.warning(f"Failed to save updated tokens: {e}")
 
     async def _create_entities(self):
-        """RACE CONDITION FIX: Atomic entity creation process"""
         if not self.client or not self.factory:
             _LOG.error("Client or factory not available for entity creation")
             return
@@ -211,7 +195,6 @@ class SmartThingsIntegration:
                 _LOG.error("No location_id found in configuration")
                 return
 
-            # FIXED: Ensure client session is ready before API calls
             await self._ensure_client_ready()
             
             async with self.client:
@@ -220,13 +203,11 @@ class SmartThingsIntegration:
 
             room_names = {room["roomId"]: room["name"] for room in rooms}
             
-            # CRITICAL: Clear existing entities to prevent duplicates
             self.api.available_entities.clear()
             created_count = 0
 
             _LOG.info(f"Processing {len(devices_raw)} devices from SmartThings...")
 
-            # Batch create all entities in one atomic operation
             for device_data in devices_raw:
                 try:
                     device_name = device_data.get("label") or device_data.get("name", "Unknown")
@@ -272,7 +253,28 @@ class SmartThingsIntegration:
 
         except Exception as e:
             _LOG.error(f"Failed to create entities: {e}", exc_info=True)
-            raise  # Re-raise to trigger error state
+            raise
+
+    async def _discover_input_modes(self, entity_ids: List[str]):
+        _LOG.info(f"Discovering input modes for {len(entity_ids)} entities...")
+        
+        media_player_count = 0
+        for entity_id in entity_ids:
+            entity = self.api.configured_entities.get(entity_id)
+            if not entity:
+                continue
+            
+            entity_type = getattr(entity, 'entity_type', None)
+            if entity_type == 'media_player':
+                media_player_count += 1
+                device_id = entity_id[3:]
+                
+                try:
+                    await self.factory.discover_input_mode(entity, device_id)
+                except Exception as e:
+                    _LOG.error(f"Failed to discover input mode for {entity.name}: {e}")
+        
+        _LOG.info(f"Input mode discovery completed for {media_player_count} media players")
 
     async def _sync_initial_state_immediate(self, entity_ids: List[str]):
         _LOG.info(f"Syncing initial state for {len(entity_ids)} entities...")
@@ -281,7 +283,6 @@ class SmartThingsIntegration:
         start_time = time.time()
         synced_count = 0
 
-        # FIXED: Ensure client is ready before sync
         await self._ensure_client_ready()
 
         batch_size = 6
@@ -359,7 +360,6 @@ class SmartThingsIntegration:
                 sleep_time = self._calculate_polling_interval()
                 await asyncio.sleep(sleep_time)
 
-                # Periodically save updated tokens
                 if consecutive_errors == 0:
                     await self._save_updated_tokens()
 
@@ -380,7 +380,6 @@ class SmartThingsIntegration:
         self.polling_active = False
 
     async def _poll_entities_intelligently(self):
-        """Poll entities with command awareness - skip devices currently executing commands"""
         import time
         now = time.time()
         entities_to_poll = []
@@ -423,7 +422,6 @@ class SmartThingsIntegration:
             _LOG.info(f"Detected {changes_detected} state changes in polling")
 
     async def _poll_entity_batch(self, entity_batch):
-        """Poll a batch of entities"""
         import time
         now = time.time()
         changes_detected = 0
@@ -454,7 +452,6 @@ class SmartThingsIntegration:
         return changes_detected
 
     def _get_entity_polling_interval(self, entity_id: str, now: float) -> float:
-        """Get polling interval for entity based on type and activity"""
         base_interval = self.config.get("polling_interval", 12)
 
         entity = self.api.configured_entities.get(entity_id)
@@ -473,7 +470,6 @@ class SmartThingsIntegration:
             return base_interval
 
     def _calculate_polling_interval(self) -> float:
-        """Calculate dynamic polling interval based on rate limits and activity"""
         import time
 
         if self.devices_in_command:
@@ -494,7 +490,6 @@ class SmartThingsIntegration:
             return max(base_config * 4, 30)
 
     def track_device_command(self, entity_id: str):
-        """Track when a device starts/stops command execution"""
         device_id = entity_id[3:] if entity_id.startswith("st_") else entity_id
         self.devices_in_command.add(device_id)
 
@@ -523,7 +518,6 @@ class SmartThingsIntegration:
         self.subscribed_entities.clear()
         self.devices_in_command.clear()
         
-        # RACE CONDITION FIX: Reset entities ready state on cleanup
         self.entities_ready = False
 
         _LOG.info("OAuth2 integration cleanup completed")
@@ -534,7 +528,6 @@ async def main():
     api = IntegrationAPI(loop)
     integration = SmartThingsIntegration(api, loop)
     
-    # RACE CONDITION FIX: Pre-initialize if already configured
     if integration.config_manager.is_configured():
         _LOG.info("Pre-configuring entities before UC Remote connection")
         loop.create_task(integration._initialize_integration())

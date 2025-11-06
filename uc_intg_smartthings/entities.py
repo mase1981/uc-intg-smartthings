@@ -651,6 +651,9 @@ class SmartThingsEntityFactory:
         entity_type = getattr(entity, 'entity_type', None)
         capabilities = getattr(entity, 'smartthings_capabilities', set())
         
+        # Normalize command ID to lowercase for comparison
+        cmd_id_lower = cmd_id.lower()
+        
         _LOG.info(f"Command received: {entity.name} -> {cmd_id} {params}")
         
         if not self.client:
@@ -669,7 +672,7 @@ class SmartThingsEntityFactory:
         
         self.last_command_time[device_id] = now
         
-        if cmd_id == 'cycle_input' and entity_type == EntityType.MEDIA_PLAYER:
+        if cmd_id_lower == 'cycle_input' and entity_type == EntityType.MEDIA_PLAYER:
             current_state = entity.attributes.get(MediaAttr.STATE)
             if current_state != MediaStates.ON:
                 _LOG.warning(f"Cannot cycle input on {entity.name}: device is {current_state}. Device must be ON first.")
@@ -677,7 +680,7 @@ class SmartThingsEntityFactory:
             
             return await self._handle_cycle_input(entity, device_id, capabilities)
         
-        if cmd_id == 'select_source' and entity_type == EntityType.MEDIA_PLAYER:
+        if cmd_id_lower == 'select_source' and entity_type == EntityType.MEDIA_PLAYER:
             current_state = entity.attributes.get(MediaAttr.STATE)
             if current_state != MediaStates.ON:
                 _LOG.warning(f"Cannot select input source on {entity.name}: device is {current_state}. Device must be ON first.")
@@ -691,7 +694,7 @@ class SmartThingsEntityFactory:
             if self.command_callback:
                 self.command_callback(entity.id)
             
-            capability, command, args = self._map_command(entity_type, cmd_id, params, entity, capabilities)
+            capability, command, args = self._map_command(entity_type, cmd_id_lower, params, entity, capabilities)
             
             if not capability or not command:
                 _LOG.warning(f"Unhandled command '{cmd_id}' for entity type '{entity_type}'")
@@ -704,7 +707,7 @@ class SmartThingsEntityFactory:
                 _LOG.error(f"Command failed for {entity.name}: {cmd_id}")
                 return StatusCodes.SERVER_ERROR
             
-            await self._verify_command_result(entity, device_id, cmd_id)
+            await self._verify_command_result(entity, device_id, cmd_id_lower)
             
             _LOG.info(f"Command completed successfully: {entity.name} -> {cmd_id}")
             return StatusCodes.OK
@@ -764,9 +767,15 @@ class SmartThingsEntityFactory:
 
     async def _handle_input_selection(self, entity, device_id: str, params: Dict[str, Any], capabilities: set) -> StatusCodes:
         target_input = params.get('source')
-        if not target_input:
-            _LOG.error("No source specified for input selection")
+        
+        # Handle empty or missing source
+        if not target_input or target_input.strip() == "":
+            _LOG.error(f"No source specified for input selection on {entity.name}. Params: {params}")
+            _LOG.error(f"Available sources: {entity.attributes.get(MediaAttr.SOURCE_LIST, [])}")
             return StatusCodes.BAD_REQUEST
+        
+        target_input = target_input.strip()
+        _LOG.info(f"Selecting input source: {target_input} on {entity.name}")
         
         input_mode = self.device_input_mode.get(device_id, "unknown")
         

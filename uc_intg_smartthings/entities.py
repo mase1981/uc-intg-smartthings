@@ -333,7 +333,6 @@ class SmartThingsEntityFactory:
 
     def _create_media_player(self, entity_id: str, name: str, device: SmartThingsDevice, area: Optional[str]) -> MediaPlayer:
         features = []
-        simple_commands = []
         
         if "switch" in device.capabilities:
             features.extend([MediaFeatures.ON_OFF, MediaFeatures.TOGGLE])
@@ -353,8 +352,7 @@ class SmartThingsEntityFactory:
         
         if has_input_capability:
             features.append(MediaFeatures.SELECT_SOURCE)
-            simple_commands.append("CYCLE_INPUT")
-            _LOG.info(f"✅ Added SELECT_SOURCE feature and CYCLE_INPUT simple command for {name}")
+            _LOG.info(f"✅ Added SELECT_SOURCE feature for {name}")
         
         device_class = MediaClasses.SPEAKER
         device_name = (device.label or device.name or "").lower()
@@ -372,6 +370,11 @@ class SmartThingsEntityFactory:
         if has_input_capability:
             initial_attributes[MediaAttr.SOURCE_LIST] = []
         
+        options = {}
+        if has_input_capability:
+            options["simple_commands"] = ["CYCLE_INPUT"]
+            _LOG.info(f"✅ Added CYCLE_INPUT simple command for {name}")
+        
         return MediaPlayer(
             entity_id, 
             name, 
@@ -379,7 +382,7 @@ class SmartThingsEntityFactory:
             initial_attributes, 
             device_class=device_class, 
             area=area, 
-            simple_commands=simple_commands,
+            options=options,
             cmd_handler=self._handle_command
         )
 

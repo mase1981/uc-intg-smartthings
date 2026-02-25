@@ -21,8 +21,9 @@ _LOG = logging.getLogger(__name__)
 class SmartThingsDevice:
     """SmartThings device wrapper with polling support."""
 
-    def __init__(self, config: SmartThingsConfig):
+    def __init__(self, config: SmartThingsConfig, **kwargs):
         """Initialize the SmartThings device."""
+        _ = kwargs  # Accept and ignore extra framework args (loop, etc.)
         self.config = config
         self.events = AsyncIOEventEmitter()
 

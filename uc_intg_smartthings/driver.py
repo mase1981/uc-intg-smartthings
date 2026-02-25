@@ -53,11 +53,19 @@ class SmartThingsDriver(BaseIntegrationDriver[SmartThingsDevice, SmartThingsConf
 
         return None
 
-    def create_entities(
+    async def create_entities(
         self, device_config: SmartThingsConfig, device: SmartThingsDevice
     ) -> list[Entity]:
         """Create entity instances dynamically based on SmartThings devices."""
         _LOG.info("Creating entities for %s", device_config.name)
+
+        if not device.is_connected:
+            _LOG.info("Device not connected, connecting now...")
+            await device.connect()
+
+        if not device.devices:
+            _LOG.error("No devices found after connection")
+            return []
 
         for st_device_id in device.devices.keys():
             self._device_to_config[st_device_id] = device_config.identifier

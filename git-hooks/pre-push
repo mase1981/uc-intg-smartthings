@@ -1,0 +1,3 @@
+#!/bin/bash
+# Pre-push hook placeholder
+exit 0

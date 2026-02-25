@@ -1,785 +1,833 @@
 """
-:copyright: (c) 2025 by Meir Miyara
+SmartThings entity factories and implementations.
+
+:copyright: (c) 2026 by Meir Miyara.
 :license: MPL-2.0, see LICENSE for more details.
 """
 
 import logging
-import asyncio
-import time
-from typing import Any, Dict, Optional, Union
+from typing import Any
 
-from ucapi import IntegrationAPI
-from ucapi.light import Light, Features as LightFeatures, Attributes as LightAttr, States as LightStates
-from ucapi.switch import Switch, Features as SwitchFeatures, Attributes as SwitchAttr, States as SwitchStates
-from ucapi.sensor import Sensor, Attributes as SensorAttr, States as SensorStates, DeviceClasses as SensorClasses
-from ucapi.cover import Cover, Features as CoverFeatures, Attributes as CoverAttr, States as CoverStates, DeviceClasses as CoverClasses
-from ucapi.button import Button, Attributes as ButtonAttr, States as ButtonStates
-from ucapi.media_player import MediaPlayer, Features as MediaFeatures, Attributes as MediaAttr, States as MediaStates, DeviceClasses as MediaClasses
-from ucapi.climate import Climate, Features as ClimateFeatures,Attributes as ClimateAttr, States as ClimateStates
-from ucapi.api_definitions import StatusCodes
+from ucapi import light, switch, sensor, climate, cover, media_player, button, select
+from ucapi import StatusCodes
+from ucapi.light import Light, Features as LightFeatures, Attributes as LightAttrs, States as LightStates
+from ucapi.switch import Switch, Features as SwitchFeatures, Attributes as SwitchAttrs, States as SwitchStates
+from ucapi.sensor import Sensor, Attributes as SensorAttrs, States as SensorStates, DeviceClasses as SensorDeviceClasses, Options as SensorOptions
+from ucapi.climate import Climate, Features as ClimateFeatures, Attributes as ClimateAttrs, States as ClimateStates
+from ucapi.cover import Cover, Features as CoverFeatures, Attributes as CoverAttrs, States as CoverStates
+from ucapi.media_player import MediaPlayer, Features as MPFeatures, Attributes as MPAttrs, States as MPStates
+from ucapi.button import Button, Attributes as ButtonAttrs, States as ButtonStates
+from ucapi.select import Select, Attributes as SelectAttrs, States as SelectStates, Commands as SelectCommands
 
-from uc_intg_smartthings.client import SmartThingsDevice, SmartThingsClient
+from uc_intg_smartthings.device import SmartThingsDevice
 
 _LOG = logging.getLogger(__name__)
 
-class EntityType:
-    LIGHT = "light"
-    SWITCH = "switch"
-    SENSOR = "sensor"
-    COVER = "cover"
-    BUTTON = "button"
-    MEDIA_PLAYER = "media_player"
-    CLIMATE = "climate"
+
+CAPABILITY_LIGHT = ["switchLevel", "colorControl", "colorTemperature"]
+CAPABILITY_SWITCH = ["switch"]
+CAPABILITY_SENSOR_TEMP = ["temperatureMeasurement"]
+CAPABILITY_SENSOR_HUMIDITY = ["relativeHumidityMeasurement"]
+CAPABILITY_SENSOR_MOTION = ["motionSensor"]
+CAPABILITY_SENSOR_CONTACT = ["contactSensor"]
+CAPABILITY_SENSOR_BATTERY = ["battery"]
+CAPABILITY_CLIMATE = ["thermostat", "thermostatMode", "thermostatCoolingSetpoint", "thermostatHeatingSetpoint"]
+CAPABILITY_COVER = ["windowShade", "doorControl", "garageDoorControl"]
+CAPABILITY_MEDIA_PLAYER = ["audioVolume", "mediaPlayback", "mediaInputSource"]
+CAPABILITY_BUTTON = ["button", "momentary"]
+
+
+def has_capability(device: dict, capability: str) -> bool:
+    """Check if a device has a specific capability."""
+    components = device.get("components", [])
+    for component in components:
+        capabilities = component.get("capabilities", [])
+        for cap in capabilities:
+            cap_id = cap.get("id", "") if isinstance(cap, dict) else cap
+            if cap_id == capability:
+                return True
+    return False
+
+
+def has_any_capability(device: dict, capabilities: list[str]) -> bool:
+    """Check if a device has any of the specified capabilities."""
+    return any(has_capability(device, cap) for cap in capabilities)
+
+
+def get_device_capabilities(device: dict) -> list[str]:
+    """Get all capabilities for a device."""
+    caps = []
+    components = device.get("components", [])
+    for component in components:
+        capabilities = component.get("capabilities", [])
+        for cap in capabilities:
+            cap_id = cap.get("id", "") if isinstance(cap, dict) else cap
+            if cap_id:
+                caps.append(cap_id)
+    return caps
+
+
+def detect_entity_type(device: dict) -> str | None:
+    """Detect the primary entity type for a device."""
+    caps = get_device_capabilities(device)
+
+    if has_any_capability(device, CAPABILITY_CLIMATE):
+        return "climate"
+
+    if has_any_capability(device, CAPABILITY_COVER):
+        return "cover"
+
+    if has_any_capability(device, CAPABILITY_MEDIA_PLAYER):
+        return "media_player"
+
+    if has_any_capability(device, CAPABILITY_LIGHT):
+        if not has_any_capability(device, ["lock", "doorControl", "thermostat"]):
+            return "light"
+
+    if has_any_capability(device, CAPABILITY_BUTTON):
+        return "button"
+
+    if has_any_capability(device, CAPABILITY_SWITCH):
+        if not has_any_capability(device, CAPABILITY_LIGHT + CAPABILITY_COVER + CAPABILITY_CLIMATE):
+            return "switch"
+
+    return None
+
+
+def get_sensor_types(device: dict) -> list[str]:
+    """Get sensor types for a device."""
+    sensors = []
+    if has_capability(device, "temperatureMeasurement"):
+        sensors.append("temperature")
+    if has_capability(device, "relativeHumidityMeasurement"):
+        sensors.append("humidity")
+    if has_capability(device, "motionSensor"):
+        sensors.append("motion")
+    if has_capability(device, "contactSensor"):
+        sensors.append("contact")
+    if has_capability(device, "battery"):
+        sensors.append("battery")
+    if has_capability(device, "powerMeter"):
+        sensors.append("power")
+    if has_capability(device, "energyMeter"):
+        sensors.append("energy")
+    if has_capability(device, "presenceSensor"):
+        sensors.append("presence")
+    if has_capability(device, "illuminanceMeasurement"):
+        sensors.append("illuminance")
+    return sensors
+
 
 class SmartThingsEntityFactory:
-    
-    def __init__(self, client: SmartThingsClient, api: IntegrationAPI):
-        self.client = client
-        self.api = api
-        self.command_in_progress = {}  # Track active commands per device
-        self.command_queue = {}  # Queue commands per device to prevent flooding
-        self.last_command_time = {}  # Track last command time per device
-        self.command_callback = None
+    """Factory for creating SmartThings entities."""
 
-    def determine_entity_type(self, device: SmartThingsDevice) -> Optional[str]:
-        capabilities = device.capabilities
-        device_name = (device.label or device.name or "").lower()
-        device_type = getattr(device, 'type', '').lower()
-        
-        _LOG.info(f"Analyzing device: {device.label}")
-        _LOG.info(f"  - Capabilities: {list(capabilities)}")
-        _LOG.info(f"  - Device Type: {device_type}")
-        _LOG.info(f"  - Device Name: {device_name}")
-        
-        # Enhanced Samsung device detection
-        if self._is_samsung_tv(device_name, device_type, capabilities):
-            _LOG.info(f"Samsung TV detected: {device.label} -> MEDIA_PLAYER")
-            return EntityType.MEDIA_PLAYER
-            
-        if self._is_samsung_soundbar(device_name, device_type, capabilities):
-            _LOG.info(f"Samsung Soundbar detected: {device.label} -> MEDIA_PLAYER")
-            return EntityType.MEDIA_PLAYER
-        
-        # Button detection
-        if "button" in capabilities or "momentary" in capabilities:
-            _LOG.info(f"Button {device.label} -> BUTTON (has button capability)")
-            return EntityType.BUTTON
-        
-        # Climate detection
-        climate_caps = {"thermostat", "thermostatCoolingSetpoint", "thermostatHeatingSetpoint", "airConditioner"}
-        if climate_caps.intersection(capabilities):
-            _LOG.info(f"Climate {device.label} -> CLIMATE (has {climate_caps.intersection(capabilities)})")
-            return EntityType.CLIMATE
-        
-        # Media player detection
-        media_caps = {"mediaPlayback", "audioVolume", "tvChannel", "mediaTrackControl", "speechSynthesis"}
-        media_keywords = ["tv", "television", "soundbar", "speaker", "audio", "receiver", "stereo", "music"]
-        
-        if (media_caps.intersection(capabilities) or 
-            any(keyword in device_name for keyword in media_keywords) or
-            any(keyword in device_type for keyword in media_keywords)):
-            _LOG.info(f"Media Player {device.label} -> MEDIA_PLAYER (caps: {media_caps.intersection(capabilities)}, name match: {any(keyword in device_name for keyword in media_keywords)})")
-            return EntityType.MEDIA_PLAYER
-        
-        # Cover detection
-        cover_caps = {"doorControl", "windowShade", "garageDoorControl"}
-        if cover_caps.intersection(capabilities):
-            _LOG.info(f"Cover {device.label} -> COVER (has {cover_caps.intersection(capabilities)})")
-            return EntityType.COVER
-        
-        # Lock detection (as switch)
-        if "lock" in capabilities and "switch" not in capabilities:
-            _LOG.info(f"Lock {device.label} -> SWITCH (lock as switch for control)")
-            return EntityType.SWITCH
-        
-        # Light detection
-        light_caps = {"switchLevel", "colorControl", "colorTemperature"}
-        light_indicators = light_caps.intersection(capabilities)
-        light_keywords = ["light", "lamp", "bulb", "led", "fixture", "sconce", "chandelier", "dimmer"]
-        
-        if light_indicators or ("switch" in capabilities and any(word in device_name for word in light_keywords)):
-            excluded_caps = {
-                "lock", "doorControl", "windowShade", "garageDoorControl",
-                "thermostat", "mediaPlayback", "audioVolume", "speechSynthesis",
-                "dryerOperatingState", "washerOperatingState", "ovenOperatingState"
-            }
-            if not excluded_caps.intersection(capabilities):
-                if light_indicators:
-                    _LOG.info(f"Light {device.label} -> LIGHT (has {light_indicators})")
-                else:
-                    _LOG.info(f"Light {device.label} -> LIGHT (name contains light keyword)")
-                return EntityType.LIGHT
-        
-        # Sensor detection
-        sensor_caps = {
-            "contactSensor", "motionSensor", "presenceSensor", 
-            "temperatureMeasurement", "relativeHumidityMeasurement",
-            "illuminanceMeasurement", "battery", "powerMeter", "energyMeter",
-            "carbonMonoxideDetector", "smokeDetector", "waterSensor",
-            "accelerationSensor", "threeAxis", "ultravioletIndex",
-            "soundSensor", "dustSensor", "airQualitySensor"
-        }
-        
-        sensor_matches = sensor_caps.intersection(capabilities)
-        if sensor_matches:
-            _LOG.info(f"Sensor {device.label} -> SENSOR (has {sensor_matches})")
-            return EntityType.SENSOR
-        
-        # Basic switch detection (fallback)
-        if "switch" in capabilities:
-            excluded_caps = {
-                "switchLevel", "colorControl", "colorTemperature",
-                "doorControl", "windowShade", "garageDoorControl",
-                "thermostat", "thermostatCoolingSetpoint", "thermostatHeatingSetpoint",
-                "mediaPlayback", "audioVolume", "speechSynthesis", "button"
-            }
-            
-            if not excluded_caps.intersection(capabilities):
-                _LOG.info(f"Switch {device.label} -> SWITCH (basic switch capability)")
-                return EntityType.SWITCH
-        
-        _LOG.warning(f"Unknown device type for {device.label}")
-        _LOG.warning(f"  - Capabilities: {capabilities}")
-        _LOG.warning(f"  - Device Type: {device_type}")
-        _LOG.warning(f"  - Device Name: {device_name}")
-        return None
+    def __init__(self, st_device: SmartThingsDevice):
+        """Initialize the entity factory."""
+        self.st_device = st_device
+        self._entities: dict[str, Any] = {}
 
-    def _is_samsung_tv(self, device_name: str, device_type: str, capabilities: set) -> bool:
-        """Enhanced Samsung TV detection"""
-        samsung_tv_indicators = [
-            # Direct name matches
-            "samsung" in device_name and "tv" in device_name,
-            "samsung" in device_name and any(model in device_name for model in ["au5000", "q70", "qled", "neo"]),
-            # Device type matches
-            "tv" in device_type,
-            "television" in device_type,
-            # Capability patterns common to Samsung TVs
-            {"switch", "audioVolume"}.issubset(capabilities),
-            {"switch", "speechSynthesis"}.issubset(capabilities),
-        ]
-        
-        return any(samsung_tv_indicators)
+    def create_entities(
+        self,
+        include_lights: bool = True,
+        include_switches: bool = True,
+        include_sensors: bool = True,
+        include_climate: bool = True,
+        include_covers: bool = True,
+        include_media_players: bool = True,
+        include_buttons: bool = True,
+    ) -> list[Any]:
+        """Create all entities for the configured devices."""
+        entities = []
 
-    def _is_samsung_soundbar(self, device_name: str, device_type: str, capabilities: set) -> bool:
-        """Enhanced Samsung Soundbar detection"""
-        samsung_soundbar_indicators = [
-            # Direct name matches
-            "samsung" in device_name and "soundbar" in device_name,
-            "samsung" in device_name and "q70t" in device_name,
-            "samsung" in device_name and "q90r" in device_name,
-            "soundbar" in device_name,
-            # Device type matches
-            "soundbar" in device_type,
-            "network audio" in device_type,
-            "speaker" in device_type and "samsung" in device_name,
-            # Capability patterns common to Samsung soundbars
-            {"audioVolume", "switch"}.issubset(capabilities),
-            "audioVolume" in capabilities and "mediaPlayback" not in capabilities,
-        ]
-        
-        return any(samsung_soundbar_indicators)
+        for device_id, device in self.st_device.devices.items():
+            device_name = device.get("label") or device.get("name", "Unknown")
+            room_name = self.st_device.rooms.get(device_id)
+            entity_type = detect_entity_type(device)
 
-    def create_entity(self, device_data: Dict[str, Any], config: Dict[str, Any], area: Optional[str] = None) -> Optional[Union[Light, Switch, Sensor, Cover, Button, MediaPlayer, Climate]]:
-        try:
-            device = SmartThingsDevice(**device_data)
-            entity_type = self.determine_entity_type(device)
+            _LOG.debug(
+                "Device %s (%s) detected as: %s",
+                device_name,
+                device_id,
+                entity_type or "sensor-only",
+            )
 
-            if not entity_type:
-                _LOG.warning(f"Could not determine entity type for {device.label}")
-                return None
+            if entity_type == "light" and include_lights:
+                entity = self._create_light_entity(device_id, device, device_name, room_name)
+                if entity:
+                    entities.append(entity)
+                    self._entities[entity.id] = entity
 
-            if not self._should_include(entity_type, config):
-                _LOG.info(f"Excluding {device.label} - {entity_type} not enabled in config")
-                return None
+            elif entity_type == "switch" and include_switches:
+                entity = self._create_switch_entity(device_id, device, device_name, room_name)
+                if entity:
+                    entities.append(entity)
+                    self._entities[entity.id] = entity
 
-            entity_id = f"st_{device.id}"
-            label = device.label or device.name or "Unknown Device"
-            
-            # Initialize command tracking for this device
-            self.command_in_progress[device.id] = False
-            self.command_queue[device.id] = []
-            self.last_command_time[device.id] = 0
+            elif entity_type == "climate" and include_climate:
+                entity = self._create_climate_entity(device_id, device, device_name, room_name)
+                if entity:
+                    entities.append(entity)
+                    self._entities[entity.id] = entity
 
-            entity = None
-            
-            if entity_type == EntityType.LIGHT:
-                entity = self._create_light(entity_id, label, device, area)
-            elif entity_type == EntityType.SWITCH:
-                entity = self._create_switch(entity_id, label, device, area)
-            elif entity_type == EntityType.SENSOR:
-                entity = self._create_sensor(entity_id, label, device, area)
-            elif entity_type == EntityType.COVER:
-                entity = self._create_cover(entity_id, label, device, area)
-            elif entity_type == EntityType.BUTTON:
-                entity = self._create_button(entity_id, label, device, area)
-            elif entity_type == EntityType.MEDIA_PLAYER:
-                entity = self._create_media_player(entity_id, label, device, area)
-            elif entity_type == EntityType.CLIMATE:
-                entity = self._create_climate(entity_id, label, device, area)
-            
-            if entity:
-                setattr(entity, 'entity_type', entity_type)
-                setattr(entity, 'smartthings_capabilities', device.capabilities)
-                setattr(entity, 'device_id', device.id)
-                
-                initial_attributes = self._get_default_attributes(entity_type, device.capabilities)
-                entity.attributes.update(initial_attributes)
-                
-                _LOG.info(f"Successfully created {entity_type} entity: {entity_id} ({label})")
-                return entity
-            else:
-                _LOG.error(f"Failed to create entity for {label}")
-                
-        except Exception as e:
-            device_name = device_data.get("label", device_data.get("name", "Unknown"))
-            _LOG.error(f"Error creating entity for {device_name}: {e}", exc_info=True)
-        
-        return None
+            elif entity_type == "cover" and include_covers:
+                entity = self._create_cover_entity(device_id, device, device_name, room_name)
+                if entity:
+                    entities.append(entity)
+                    self._entities[entity.id] = entity
 
-    def _should_include(self, entity_type: Optional[str], config: Dict[str, Any]) -> bool:
-        if not entity_type: 
-            return False
-        
-        config_mappings = {
-            EntityType.LIGHT: "include_lights",
-            EntityType.SWITCH: "include_switches", 
-            EntityType.SENSOR: "include_sensors",
-            EntityType.COVER: "include_covers",
-            EntityType.BUTTON: "include_buttons",
-            EntityType.MEDIA_PLAYER: "include_media_players",
-            EntityType.CLIMATE: "include_climate"
-        }
-        
-        config_key = config_mappings.get(entity_type)
-        if not config_key:
-            return False
-            
-        default_value = entity_type in [EntityType.LIGHT, EntityType.SWITCH, EntityType.COVER, EntityType.BUTTON, EntityType.MEDIA_PLAYER, EntityType.CLIMATE]
-        return config.get(config_key, default_value)
+            elif entity_type == "media_player" and include_media_players:
+                entity = self._create_media_player_entity(device_id, device, device_name, room_name)
+                if entity:
+                    entities.append(entity)
+                    self._entities[entity.id] = entity
 
-    def _get_default_attributes(self, entity_type: str, capabilities: set) -> Dict[str, Any]:
-        if entity_type == EntityType.LIGHT:
-            attrs = {LightAttr.STATE: LightStates.UNKNOWN}
-            if "switchLevel" in capabilities:
-                attrs[LightAttr.BRIGHTNESS] = 0
-            if "colorControl" in capabilities:
-                attrs[LightAttr.HUE] = 0
-                attrs[LightAttr.SATURATION] = 0
-            if "colorTemperature" in capabilities:
-                attrs[LightAttr.COLOR_TEMPERATURE] = 2700
-            return attrs
-        elif entity_type == EntityType.SWITCH:
-            return {SwitchAttr.STATE: SwitchStates.UNKNOWN}
-        elif entity_type == EntityType.SENSOR:
-            return {SensorAttr.STATE: SensorStates.ON, SensorAttr.VALUE: "unknown"}
-        elif entity_type == EntityType.COVER:
-            return {CoverAttr.STATE: CoverStates.UNKNOWN}
-        elif entity_type == EntityType.BUTTON:
-            return {ButtonAttr.STATE: ButtonStates.AVAILABLE}
-        elif entity_type == EntityType.MEDIA_PLAYER:
-            return {MediaAttr.STATE: MediaStates.UNKNOWN}
-        elif entity_type == EntityType.CLIMATE:
-            return {ClimateAttr.STATE: ClimateStates.UNKNOWN}
-        return {}
+            elif entity_type == "button" and include_buttons:
+                entity = self._create_button_entity(device_id, device, device_name, room_name)
+                if entity:
+                    entities.append(entity)
+                    self._entities[entity.id] = entity
 
-    def _create_light(self, entity_id: str, name: str, device: SmartThingsDevice, area: Optional[str]) -> Light:
+            if include_sensors:
+                sensor_entities = self._create_sensor_entities(device_id, device, device_name, room_name)
+                for sensor_entity in sensor_entities:
+                    entities.append(sensor_entity)
+                    self._entities[sensor_entity.id] = sensor_entity
+
+        scene_select = self._create_scene_select()
+        if scene_select:
+            entities.append(scene_select)
+            self._entities[scene_select.id] = scene_select
+
+        mode_select = self._create_mode_select()
+        if mode_select:
+            entities.append(mode_select)
+            self._entities[mode_select.id] = mode_select
+
+        _LOG.info("Created %d entities", len(entities))
+        return entities
+
+    def _create_light_entity(
+        self, device_id: str, device: dict, name: str, area: str | None
+    ) -> Light | None:
+        """Create a light entity."""
         features = [LightFeatures.ON_OFF, LightFeatures.TOGGLE]
-        
-        if "switchLevel" in device.capabilities:
+
+        if has_capability(device, "switchLevel"):
             features.append(LightFeatures.DIM)
-        if "colorControl" in device.capabilities:
+
+        if has_capability(device, "colorControl"):
             features.append(LightFeatures.COLOR)
-        if "colorTemperature" in device.capabilities:
+
+        if has_capability(device, "colorTemperature"):
             features.append(LightFeatures.COLOR_TEMPERATURE)
-        
+
+        entity_id = f"light.st_{device_id}"
+
+        async def cmd_handler(entity: Light, cmd_id: str, params: dict | None) -> StatusCodes:
+            return await self._handle_light_command(device_id, cmd_id, params)
+
         return Light(
-            entity_id, name, features, {}, area=area, cmd_handler=self._handle_command
+            entity_id,
+            name,
+            features,
+            {
+                LightAttrs.STATE: LightStates.UNKNOWN,
+                LightAttrs.BRIGHTNESS: 0,
+            },
+            area=area,
+            cmd_handler=cmd_handler,
         )
 
-    def _create_switch(self, entity_id: str, name: str, device: SmartThingsDevice, area: Optional[str]) -> Switch:
+    def _create_switch_entity(
+        self, device_id: str, device: dict, name: str, area: str | None
+    ) -> Switch | None:
+        """Create a switch entity."""
+        features = [SwitchFeatures.ON_OFF, SwitchFeatures.TOGGLE]
+        entity_id = f"switch.st_{device_id}"
+
+        async def cmd_handler(entity: Switch, cmd_id: str, params: dict | None) -> StatusCodes:
+            return await self._handle_switch_command(device_id, cmd_id, params)
+
         return Switch(
-            entity_id, name, [SwitchFeatures.ON_OFF, SwitchFeatures.TOGGLE], 
-            {}, area=area, cmd_handler=self._handle_command
+            entity_id,
+            name,
+            features,
+            {SwitchAttrs.STATE: SwitchStates.UNKNOWN},
+            area=area,
+            cmd_handler=cmd_handler,
         )
 
-    def _create_sensor(self, entity_id: str, name: str, device: SmartThingsDevice, area: Optional[str]) -> Sensor:
-        device_class = SensorClasses.CUSTOM
-        
-        if "lock" in device.capabilities:
-            device_class = SensorClasses.CUSTOM
-        elif "temperatureMeasurement" in device.capabilities:
-            device_class = SensorClasses.TEMPERATURE
-        elif "battery" in device.capabilities:
-            device_class = SensorClasses.BATTERY
-        elif "powerMeter" in device.capabilities:
-            device_class = SensorClasses.POWER
-        elif "energyMeter" in device.capabilities:
-            device_class = SensorClasses.ENERGY
-        elif "relativeHumidityMeasurement" in device.capabilities:
-            device_class = SensorClasses.HUMIDITY
-        elif "voltageMeasurement" in device.capabilities:
-            device_class = SensorClasses.VOLTAGE
-        
-        return Sensor(entity_id, name, [], {}, device_class=device_class, area=area)
+    def _create_climate_entity(
+        self, device_id: str, device: dict, name: str, area: str | None
+    ) -> Climate | None:
+        """Create a climate entity."""
+        features = [ClimateFeatures.ON_OFF]
 
-    def _create_cover(self, entity_id: str, name: str, device: SmartThingsDevice, area: Optional[str]) -> Cover:
-        features = [CoverFeatures.OPEN, CoverFeatures.CLOSE, CoverFeatures.STOP]
-        
-        if "windowShadeLevel" in device.capabilities:
-            features.append(CoverFeatures.POSITION)
-        
-        device_class = CoverClasses.SHADE
-        device_name = (device.label or device.name or "").lower()
-        
-        if "doorControl" in device.capabilities or "garageDoorControl" in device.capabilities:
-            if any(word in device_name for word in ["garage", "gate"]):
-                device_class = CoverClasses.GARAGE
-            else:
-                device_class = CoverClasses.DOOR
-        elif "windowShade" in device.capabilities:
-            if "curtain" in device_name:
-                device_class = CoverClasses.CURTAIN
-            elif "blind" in device_name:
-                device_class = CoverClasses.BLIND
-        
-        return Cover(entity_id, name, features, {}, device_class=device_class, area=area, cmd_handler=self._handle_command)
+        if has_capability(device, "thermostatHeatingSetpoint"):
+            features.append(ClimateFeatures.TARGET_TEMPERATURE)
+            features.append(ClimateFeatures.HEAT)
 
-    def _create_button(self, entity_id: str, name: str, device: SmartThingsDevice, area: Optional[str]) -> Button:
-        return Button(entity_id, name, area=area, cmd_handler=self._handle_command)
+        if has_capability(device, "thermostatCoolingSetpoint"):
+            features.append(ClimateFeatures.TARGET_TEMPERATURE)
+            features.append(ClimateFeatures.COOL)
 
-    def _create_media_player(self, entity_id: str, name: str, device: SmartThingsDevice, area: Optional[str]) -> MediaPlayer:
-        features = []
-        
-        if "switch" in device.capabilities:
-            features.extend([MediaFeatures.ON_OFF, MediaFeatures.TOGGLE])
-        if "audioVolume" in device.capabilities:
-            features.extend([MediaFeatures.VOLUME, MediaFeatures.VOLUME_UP_DOWN, MediaFeatures.MUTE_TOGGLE])
-        if "mediaPlayback" in device.capabilities:
-            features.extend([MediaFeatures.PLAY_PAUSE, MediaFeatures.STOP])
-        # Add source selection feature for devices with input source capability
-        if "mediaInputSource" in device.capabilities or "samsungvd.mediaInputSource" in device.capabilities:
-            features.append(MediaFeatures.SELECT_SOURCE)
-        
-        # Enhanced device class detection for Samsung devices
-        device_class = MediaClasses.SPEAKER
-        device_name = (device.label or device.name or "").lower()
-        device_type = getattr(device, 'type', '').lower()
-        
-        if any(word in device_name for word in ["tv", "television"]) or "tv" in device_type:
-            device_class = MediaClasses.TV
-        elif any(word in device_name for word in ["soundbar", "q70t", "q90r"]) or "soundbar" in device_type or "network audio" in device_type:
-            device_class = MediaClasses.SPEAKER
-        elif any(word in device_name for word in ["receiver", "amplifier"]):
-            device_class = MediaClasses.RECEIVER
+        if has_capability(device, "thermostatMode"):
+            features.append(ClimateFeatures.HVAC_MODES)
 
-        # Initialize attributes with default values
-        initial_attributes = {MediaAttr.STATE: MediaStates.UNKNOWN}
-        
-        # Set available input sources for devices with input capabilities
-        if ("mediaInputSource" in device.capabilities or "samsungvd.mediaInputSource" in device.capabilities):
-            if "samsung" in device_name.lower() and ("soundbar" in device_name.lower() or "q90r" in device_name.lower()):
-                # Samsung soundbar input sources - includes wifi as alias for network
-                initial_attributes[MediaAttr.SOURCE_LIST] = [
-                    "HDMI1", "HDMI2", "HDMI3", "HDMI4", "USB", "aux", "bluetooth", "optical", 
-                    "coaxial", "network", "wifi"  # wifi is alias for network
-                ]
-            else:
-                # Generic TV/media device input sources
-                initial_attributes[MediaAttr.SOURCE_LIST] = [
-                    "HDMI1", "HDMI2", "HDMI3", "HDMI4", "USB", "aux", "bluetooth", "optical"
-                ]
-        
-        return MediaPlayer(entity_id, name, features, initial_attributes, device_class=device_class, area=area, cmd_handler=self._handle_command)
-
-    def _create_climate(self, entity_id: str, name: str, device: SmartThingsDevice, area: Optional[str]) -> Climate:
-        features = []
-        
-        if "thermostat" in device.capabilities:
-            features.extend([ClimateFeatures.HEAT, ClimateFeatures.COOL, ClimateFeatures.TARGET_TEMPERATURE])
-        if "temperatureMeasurement" in device.capabilities:
-            features.append(ClimateFeatures.CURRENT_TEMPERATURE)
-        if "fan" in device.capabilities:
+        if has_capability(device, "thermostatFanMode"):
             features.append(ClimateFeatures.FAN)
-        
-        return Climate(entity_id, name, features, {}, area=area, cmd_handler=self._handle_command)
 
-    def update_entity_attributes(self, entity: Any, device_status: Dict[str, Any]):
-        main_component = device_status.get("components", {}).get("main", {})
-        if not main_component: 
-            return
+        entity_id = f"climate.st_{device_id}"
 
-        entity_type = getattr(entity, 'entity_type', None)
-        capabilities = getattr(entity, 'smartthings_capabilities', set())
-        
-        if not entity_type:
-            return
-        
-        old_attributes = dict(entity.attributes)
-        
-        try:
-            if entity_type == EntityType.LIGHT:
-                self._update_light_attributes(entity, main_component)
-            elif entity_type == EntityType.SWITCH:
-                if "lock" in capabilities:
-                    self._update_lock_as_switch_attributes(entity, main_component)
-                else:
-                    self._update_switch_attributes(entity, main_component)
-            elif entity_type == EntityType.SENSOR:
-                self._update_sensor_attributes(entity, main_component)
-            elif entity_type == EntityType.COVER:
-                self._update_cover_attributes(entity, main_component)
-            elif entity_type == EntityType.BUTTON:
-                self._update_button_attributes(entity, main_component)
-            elif entity_type == EntityType.MEDIA_PLAYER:
-                self._update_media_player_attributes(entity, main_component)
-            elif entity_type == EntityType.CLIMATE:
-                self._update_climate_attributes(entity, main_component)
-            
-            if old_attributes != entity.attributes:
-                _LOG.info(f"Real state update: {entity.name} -> {entity.attributes}")
-                
-        except Exception as e:
-            _LOG.error(f"Error updating attributes for {entity.id}: {e}")
-            entity.attributes.update(old_attributes)
+        async def cmd_handler(entity: Climate, cmd_id: str, params: dict | None) -> StatusCodes:
+            return await self._handle_climate_command(device_id, cmd_id, params)
 
-    def _update_light_attributes(self, entity: Light, main_component: Dict[str, Any]):
-        if "switch" in main_component:
-            switch_value = main_component["switch"].get("switch", {}).get("value")
-            if switch_value:
-                new_state = LightStates.ON if switch_value == "on" else LightStates.OFF
-                entity.attributes[LightAttr.STATE] = new_state
-        
-        if "switchLevel" in main_component:
-            level_value = main_component["switchLevel"].get("level", {}).get("value")
-            if level_value is not None:
-                entity.attributes[LightAttr.BRIGHTNESS] = int(level_value)
+        return Climate(
+            entity_id,
+            name,
+            features,
+            {
+                ClimateAttrs.STATE: ClimateStates.UNKNOWN,
+                ClimateAttrs.CURRENT_TEMPERATURE: None,
+                ClimateAttrs.TARGET_TEMPERATURE: None,
+            },
+            area=area,
+            cmd_handler=cmd_handler,
+        )
 
-    def _update_switch_attributes(self, entity: Switch, main_component: Dict[str, Any]):
-        if "switch" in main_component:
-            switch_value = main_component["switch"].get("switch", {}).get("value")
-            if switch_value:
-                new_state = SwitchStates.ON if switch_value == "on" else SwitchStates.OFF
-                entity.attributes[SwitchAttr.STATE] = new_state
+    def _create_cover_entity(
+        self, device_id: str, device: dict, name: str, area: str | None
+    ) -> Cover | None:
+        """Create a cover entity."""
+        features = [CoverFeatures.OPEN, CoverFeatures.CLOSE]
 
-    def _update_lock_as_switch_attributes(self, entity: Switch, main_component: Dict[str, Any]):
-        if "lock" in main_component:
-            lock_value = main_component["lock"].get("lock", {}).get("value")
-            if lock_value:
-                new_state = SwitchStates.ON if lock_value == "locked" else SwitchStates.OFF
-                entity.attributes[SwitchAttr.STATE] = new_state
+        if has_capability(device, "windowShadeLevel"):
+            features.append(CoverFeatures.POSITION)
 
-    def _update_sensor_attributes(self, entity: Sensor, main_component: Dict[str, Any]):
-        entity.attributes[SensorAttr.STATE] = SensorStates.ON
-        
-        if "lock" in main_component:
-            lock_value = main_component["lock"].get("lock", {}).get("value")
-            if lock_value:
-                entity.attributes[SensorAttr.VALUE] = str(lock_value).title()
-        elif "contactSensor" in main_component:
-            contact_value = main_component["contactSensor"].get("contact", {}).get("value")
-            if contact_value:
-                entity.attributes[SensorAttr.VALUE] = str(contact_value).title()
-        elif "temperatureMeasurement" in main_component:
-            temp_value = main_component["temperatureMeasurement"].get("temperature", {}).get("value")
-            if temp_value is not None:
-                entity.attributes[SensorAttr.VALUE] = round(float(temp_value), 1)
-                entity.attributes[SensorAttr.UNIT] = "°C"
-        elif "battery" in main_component:
-            battery_value = main_component["battery"].get("battery", {}).get("value")
-            if battery_value is not None:
-                entity.attributes[SensorAttr.VALUE] = int(battery_value)
-                entity.attributes[SensorAttr.UNIT] = "%"
+        if has_capability(device, "windowShade"):
+            features.append(CoverFeatures.STOP)
 
-    def _update_cover_attributes(self, entity: Cover, main_component: Dict[str, Any]):
-        if "doorControl" in main_component:
-            door_value = main_component["doorControl"].get("door", {}).get("value")
-            if door_value:
-                state_map = {
-                    "open": CoverStates.OPEN,
-                    "closed": CoverStates.CLOSED,
-                    "opening": CoverStates.OPENING,
-                    "closing": CoverStates.CLOSING
-                }
-                entity.attributes[CoverAttr.STATE] = state_map.get(door_value, CoverStates.UNKNOWN)
+        entity_id = f"cover.st_{device_id}"
 
-    def _update_button_attributes(self, entity: Button, main_component: Dict[str, Any]):
-        entity.attributes[ButtonAttr.STATE] = ButtonStates.AVAILABLE
+        async def cmd_handler(entity: Cover, cmd_id: str, params: dict | None) -> StatusCodes:
+            return await self._handle_cover_command(device_id, cmd_id, params)
 
-    def _update_media_player_attributes(self, entity: MediaPlayer, main_component: Dict[str, Any]):
-        if "switch" in main_component:
-            switch_value = main_component["switch"].get("switch", {}).get("value")
-            if switch_value:
-                entity.attributes[MediaAttr.STATE] = MediaStates.ON if switch_value == "on" else MediaStates.OFF
-        
-        if "audioVolume" in main_component:
-            volume_value = main_component["audioVolume"].get("volume", {}).get("value")
-            if volume_value is not None:
-                entity.attributes[MediaAttr.VOLUME] = int(volume_value)
-            
-            mute_value = main_component["audioVolume"].get("mute", {}).get("value")
-            if mute_value is not None:
-                entity.attributes[MediaAttr.MUTED] = mute_value == "muted"
-        
-        # RESTORED: Enhanced mute status detection for Samsung devices
-        if "audioMute" in main_component:
-            mute_value = main_component["audioMute"].get("mute", {}).get("value")
-            if mute_value is not None:
-                entity.attributes[MediaAttr.MUTED] = mute_value == "muted"
-        
-        # RESTORED: Handle current input source - check both capability types
-        if "mediaInputSource" in main_component:
-            source_value = main_component["mediaInputSource"].get("inputSource", {}).get("value")
-            if source_value is not None:
-                entity.attributes[MediaAttr.SOURCE] = str(source_value)
-        elif "samsungvd.mediaInputSource" in main_component:
-            source_value = main_component["samsungvd.mediaInputSource"].get("inputSource", {}).get("value")
-            if source_value is not None:
-                entity.attributes[MediaAttr.SOURCE] = str(source_value)
+        return Cover(
+            entity_id,
+            name,
+            features,
+            {
+                CoverAttrs.STATE: CoverStates.UNKNOWN,
+                CoverAttrs.POSITION: 0,
+            },
+            area=area,
+            cmd_handler=cmd_handler,
+        )
 
-    def _update_climate_attributes(self, entity: Climate, main_component: Dict[str, Any]):
-        if "thermostat" in main_component:
-            mode_value = main_component["thermostat"].get("thermostatMode", {}).get("value")
-            if mode_value:
-                state_map = {
-                    "heat": ClimateStates.HEAT,
-                    "cool": ClimateStates.COOL,
-                    "auto": ClimateStates.AUTO,
-                    "off": ClimateStates.OFF
-                }
-                entity.attributes[ClimateAttr.STATE] = state_map.get(mode_value, ClimateStates.UNKNOWN)
+    def _create_media_player_entity(
+        self, device_id: str, device: dict, name: str, area: str | None
+    ) -> MediaPlayer | None:
+        """Create a media player entity."""
+        features = [MPFeatures.ON_OFF]
 
-    async def _handle_command(self, entity, cmd_id: str, params: Dict[str, Any] = None) -> StatusCodes:
-        if params is None:
-            params = {}
-            
-        device_id = getattr(entity, 'device_id', entity.id[3:])
-        entity_type = getattr(entity, 'entity_type', None)
-        capabilities = getattr(entity, 'smartthings_capabilities', set())
-        
-        _LOG.info(f"Command received: {entity.name} -> {cmd_id} {params}")
-        
-        if not self.client:
-            _LOG.error(f"No client available for command: {entity.name}")
-            return StatusCodes.SERVICE_UNAVAILABLE
-        
-        # Check if command is already in progress for this device
-        if self.command_in_progress.get(device_id, False):
-            _LOG.warning(f"Command already in progress for {entity.name}, ignoring new command")
-            return StatusCodes.CONFLICT
-        
-        # Rate limiting: prevent commands too close together
-        now = time.time()
-        last_cmd_time = self.last_command_time.get(device_id, 0)
-        if now - last_cmd_time < 0.5:  # Minimum 500ms between commands
-            _LOG.warning(f"Commands too frequent for {entity.name}, ignoring")
-            return StatusCodes.CONFLICT
-        
-        self.last_command_time[device_id] = now
-        
-        # CRITICAL FIX: Check device state before input source commands
-        if cmd_id == 'select_source' and entity_type == EntityType.MEDIA_PLAYER:
-            current_state = entity.attributes.get(MediaAttr.STATE)
-            if current_state != MediaStates.ON:
-                _LOG.warning(f"Cannot select input source on {entity.name}: device is {current_state}. Device must be ON first.")
-                return StatusCodes.BAD_REQUEST
-        
-        try:
-            # Mark command in progress
-            self.command_in_progress[device_id] = True
-            
-            # Notify driver to pause polling for this device
-            if self.command_callback:
-                self.command_callback(entity.id)
-            
-            capability, command, args = self._map_command(entity_type, cmd_id, params, entity, capabilities)
-            
-            if not capability or not command:
-                _LOG.warning(f"Unhandled command '{cmd_id}' for entity type '{entity_type}'")
-                return StatusCodes.NOT_IMPLEMENTED
-            
-            # Execute command synchronously
-            async with self.client:
-                command_success = await self.client.execute_command(device_id, capability, command, args)
-            
-            if not command_success:
-                _LOG.error(f"Command failed for {entity.name}: {cmd_id}")
-                return StatusCodes.SERVER_ERROR
-            
-            # Wait for device to process command, then verify state
-            await self._verify_command_result(entity, device_id, cmd_id)
-            
-            _LOG.info(f"Command completed successfully: {entity.name} -> {cmd_id}")
-            return StatusCodes.OK
-                
-        except Exception as e:
-            _LOG.error(f"Command failed for {entity.name}: {e}")
-            return StatusCodes.SERVER_ERROR
-        finally:
-            # Always clear the in-progress flag
-            self.command_in_progress[device_id] = False
+        if has_capability(device, "audioVolume"):
+            features.extend([MPFeatures.VOLUME, MPFeatures.VOLUME_UP_DOWN, MPFeatures.MUTE])
 
-    async def _verify_command_result(self, entity, device_id: str, cmd_id: str):
-        """Smart verification that respects rate limits - SAFE 0.5s DELAY"""
-        try:
-            # Skip verification if we're hitting rate limits - let polling handle it
-            if hasattr(self.client, '_last_rate_limit') and time.time() - self.client._last_rate_limit < 30:
-                _LOG.info(f"Skipping verification due to recent rate limit, polling will catch up: {entity.name}")
-                return
-                
-            #  Reduced from 1.5s to 0.5s while maintaining API safety
-            await asyncio.sleep(0.5)
-            
-            try:
-                async with self.client:
-                    device_status = await self.client.get_device_status(device_id)
-                    
-                if device_status:
-                    old_attributes = dict(entity.attributes)
-                    self.update_entity_attributes(entity, device_status)
-                    
-                    if old_attributes != entity.attributes:
-                        self.api.configured_entities.update_attributes(entity.id, entity.attributes)
-                        _LOG.info(f"Command verification success: {entity.name} -> {entity.attributes}")
-                    else:
-                        _LOG.debug(f"No state change yet for {entity.name}, polling will catch up")
-                else:
-                    _LOG.debug(f"No status returned for {entity.name}, polling will catch up")
-                    
-            except Exception as e:
-                if "409" in str(e):
-                    _LOG.info(f"Rate limited during verification for {entity.name}, polling will catch up")
-                    # Mark rate limit so future commands can skip verification
-                    self.client._last_rate_limit = time.time()
-                else:
-                    _LOG.warning(f"Verification failed for {entity.name}: {e}")
-                        
-        except Exception as e:
-            _LOG.error(f"Command verification error for {entity.name}: {e}")
+        if has_capability(device, "mediaPlayback"):
+            features.extend([MPFeatures.PLAY_PAUSE, MPFeatures.STOP])
 
-    def _map_command(self, entity_type: str, cmd_id: str, params: Dict[str, Any], entity, capabilities: set) -> tuple:
-        capability = command = args = None
-        
-        if entity_type == EntityType.SWITCH:
-            if "lock" in capabilities:
-                if cmd_id == 'on':
-                    capability, command = 'lock', 'lock'
-                elif cmd_id == 'off':
-                    capability, command = 'lock', 'unlock'
-                elif cmd_id == 'toggle':
-                    current_state = entity.attributes.get(SwitchAttr.STATE)
-                    if current_state == SwitchStates.ON:
-                        capability, command = 'lock', 'unlock'
-                    else:
-                        capability, command = 'lock', 'lock'
+        if has_capability(device, "mediaInputSource"):
+            features.append(MPFeatures.SELECT_SOURCE)
+
+        entity_id = f"media_player.st_{device_id}"
+
+        async def cmd_handler(entity: MediaPlayer, cmd_id: str, params: dict | None) -> StatusCodes:
+            return await self._handle_media_player_command(device_id, cmd_id, params)
+
+        return MediaPlayer(
+            entity_id,
+            name,
+            features,
+            {
+                MPAttrs.STATE: MPStates.UNKNOWN,
+                MPAttrs.VOLUME: 0,
+                MPAttrs.MUTED: False,
+            },
+            area=area,
+            cmd_handler=cmd_handler,
+        )
+
+    def _create_button_entity(
+        self, device_id: str, device: dict, name: str, area: str | None
+    ) -> Button | None:
+        """Create a button entity."""
+        entity_id = f"button.st_{device_id}"
+
+        async def cmd_handler(entity: Button, cmd_id: str, params: dict | None) -> StatusCodes:
+            return await self._handle_button_command(device_id, cmd_id, params)
+
+        return Button(
+            entity_id,
+            name,
+            cmd_handler=cmd_handler,
+            area=area,
+        )
+
+    def _create_sensor_entities(
+        self, device_id: str, device: dict, name: str, area: str | None
+    ) -> list[Sensor]:
+        """Create sensor entities for a device."""
+        sensors = []
+        sensor_types = get_sensor_types(device)
+
+        for sensor_type in sensor_types:
+            entity_id = f"sensor.st_{device_id}_{sensor_type}"
+            sensor_name = f"{name} {sensor_type.title()}"
+
+            if sensor_type == "temperature":
+                sensor_entity = Sensor(
+                    entity_id,
+                    sensor_name,
+                    features=[],
+                    attributes={
+                        SensorAttrs.STATE: SensorStates.UNKNOWN,
+                        SensorAttrs.VALUE: None,
+                    },
+                    device_class=SensorDeviceClasses.TEMPERATURE,
+                    options={SensorOptions.NATIVE_UNIT: "C"},
+                    area=area,
+                )
+            elif sensor_type == "humidity":
+                sensor_entity = Sensor(
+                    entity_id,
+                    sensor_name,
+                    features=[],
+                    attributes={
+                        SensorAttrs.STATE: SensorStates.UNKNOWN,
+                        SensorAttrs.VALUE: None,
+                    },
+                    device_class=SensorDeviceClasses.HUMIDITY,
+                    area=area,
+                )
+            elif sensor_type == "battery":
+                sensor_entity = Sensor(
+                    entity_id,
+                    sensor_name,
+                    features=[],
+                    attributes={
+                        SensorAttrs.STATE: SensorStates.UNKNOWN,
+                        SensorAttrs.VALUE: None,
+                    },
+                    device_class=SensorDeviceClasses.BATTERY,
+                    area=area,
+                )
+            elif sensor_type == "power":
+                sensor_entity = Sensor(
+                    entity_id,
+                    sensor_name,
+                    features=[],
+                    attributes={
+                        SensorAttrs.STATE: SensorStates.UNKNOWN,
+                        SensorAttrs.VALUE: None,
+                    },
+                    device_class=SensorDeviceClasses.POWER,
+                    area=area,
+                )
+            elif sensor_type == "energy":
+                sensor_entity = Sensor(
+                    entity_id,
+                    sensor_name,
+                    features=[],
+                    attributes={
+                        SensorAttrs.STATE: SensorStates.UNKNOWN,
+                        SensorAttrs.VALUE: None,
+                    },
+                    device_class=SensorDeviceClasses.ENERGY,
+                    area=area,
+                )
             else:
-                if cmd_id == 'on':
-                    capability, command = 'switch', 'on'
-                elif cmd_id == 'off':
-                    capability, command = 'switch', 'off'
-                elif cmd_id == 'toggle':
-                    current_state = entity.attributes.get(SwitchAttr.STATE)
-                    if current_state == SwitchStates.ON:
-                        capability, command = 'switch', 'off'
+                sensor_entity = Sensor(
+                    entity_id,
+                    sensor_name,
+                    features=[],
+                    attributes={
+                        SensorAttrs.STATE: SensorStates.UNKNOWN,
+                        SensorAttrs.VALUE: None,
+                    },
+                    device_class=SensorDeviceClasses.BINARY,
+                    options={SensorOptions.CUSTOM_UNIT: sensor_type},
+                    area=area,
+                )
+
+            sensors.append(sensor_entity)
+
+        return sensors
+
+    def _create_scene_select(self) -> Select | None:
+        """Create a select entity for scenes."""
+        if not self.st_device.scenes:
+            return None
+
+        scene_names = [s.get("sceneName", "Unknown") for s in self.st_device.scenes]
+        if not scene_names:
+            return None
+
+        entity_id = f"select.st_{self.st_device.identifier}_scenes"
+
+        async def cmd_handler(entity: Select, cmd_id: str, params: dict | None) -> StatusCodes:
+            return await self._handle_scene_select_command(cmd_id, params)
+
+        return Select(
+            entity_id,
+            f"{self.st_device.name} Scenes",
+            {
+                SelectAttrs.STATE: SelectStates.ON,
+                SelectAttrs.OPTIONS: scene_names,
+                SelectAttrs.CURRENT_OPTION: scene_names[0] if scene_names else None,
+            },
+            cmd_handler=cmd_handler,
+        )
+
+    def _create_mode_select(self) -> Select | None:
+        """Create a select entity for location modes."""
+        if not self.st_device.modes:
+            return None
+
+        mode_names = [m.get("name", "Unknown") for m in self.st_device.modes]
+        if not mode_names:
+            return None
+
+        entity_id = f"select.st_{self.st_device.identifier}_modes"
+        current = self.st_device.current_mode or (mode_names[0] if mode_names else None)
+
+        async def cmd_handler(entity: Select, cmd_id: str, params: dict | None) -> StatusCodes:
+            return await self._handle_mode_select_command(cmd_id, params)
+
+        return Select(
+            entity_id,
+            f"{self.st_device.name} Mode",
+            {
+                SelectAttrs.STATE: SelectStates.ON,
+                SelectAttrs.OPTIONS: mode_names,
+                SelectAttrs.CURRENT_OPTION: current,
+            },
+            cmd_handler=cmd_handler,
+        )
+
+    async def _handle_light_command(
+        self, device_id: str, cmd_id: str, params: dict | None
+    ) -> StatusCodes:
+        """Handle light commands."""
+        if cmd_id == light.Commands.ON:
+            success = await self.st_device.execute_command(device_id, "switch", "on")
+        elif cmd_id == light.Commands.OFF:
+            success = await self.st_device.execute_command(device_id, "switch", "off")
+        elif cmd_id == light.Commands.TOGGLE:
+            current = self.st_device.get_device_capability_status(device_id, "switch", "switch")
+            cmd = "off" if current == "on" else "on"
+            success = await self.st_device.execute_command(device_id, "switch", cmd)
+        elif cmd_id == light.Commands.BRIGHTNESS:
+            level = params.get("brightness", 100) if params else 100
+            success = await self.st_device.execute_command(
+                device_id, "switchLevel", "setLevel", [level]
+            )
+        elif cmd_id == light.Commands.COLOR_TEMPERATURE:
+            temp = params.get("color_temperature", 4000) if params else 4000
+            success = await self.st_device.execute_command(
+                device_id, "colorTemperature", "setColorTemperature", [temp]
+            )
+        elif cmd_id == light.Commands.COLOR:
+            hue = params.get("hue", 0) if params else 0
+            sat = params.get("saturation", 100) if params else 100
+            success = await self.st_device.execute_command(
+                device_id, "colorControl", "setHue", [hue]
+            )
+            if success:
+                success = await self.st_device.execute_command(
+                    device_id, "colorControl", "setSaturation", [sat]
+                )
+        else:
+            _LOG.warning("Unknown light command: %s", cmd_id)
+            return StatusCodes.NOT_IMPLEMENTED
+
+        return StatusCodes.OK if success else StatusCodes.SERVER_ERROR
+
+    async def _handle_switch_command(
+        self, device_id: str, cmd_id: str, params: dict | None
+    ) -> StatusCodes:
+        """Handle switch commands."""
+        if cmd_id == switch.Commands.ON:
+            success = await self.st_device.execute_command(device_id, "switch", "on")
+        elif cmd_id == switch.Commands.OFF:
+            success = await self.st_device.execute_command(device_id, "switch", "off")
+        elif cmd_id == switch.Commands.TOGGLE:
+            current = self.st_device.get_device_capability_status(device_id, "switch", "switch")
+            cmd = "off" if current == "on" else "on"
+            success = await self.st_device.execute_command(device_id, "switch", cmd)
+        else:
+            _LOG.warning("Unknown switch command: %s", cmd_id)
+            return StatusCodes.NOT_IMPLEMENTED
+
+        return StatusCodes.OK if success else StatusCodes.SERVER_ERROR
+
+    async def _handle_climate_command(
+        self, device_id: str, cmd_id: str, params: dict | None
+    ) -> StatusCodes:
+        """Handle climate commands."""
+        if cmd_id == climate.Commands.ON:
+            success = await self.st_device.execute_command(
+                device_id, "thermostatMode", "auto"
+            )
+        elif cmd_id == climate.Commands.OFF:
+            success = await self.st_device.execute_command(
+                device_id, "thermostatMode", "off"
+            )
+        elif cmd_id == climate.Commands.HVAC_MODE:
+            mode = params.get("hvac_mode", "auto") if params else "auto"
+            success = await self.st_device.execute_command(
+                device_id, "thermostatMode", "setThermostatMode", [mode]
+            )
+        elif cmd_id == climate.Commands.TARGET_TEMPERATURE:
+            temp = params.get("temperature", 21) if params else 21
+            success = await self.st_device.execute_command(
+                device_id, "thermostatHeatingSetpoint", "setHeatingSetpoint", [temp]
+            )
+        else:
+            _LOG.warning("Unknown climate command: %s", cmd_id)
+            return StatusCodes.NOT_IMPLEMENTED
+
+        return StatusCodes.OK if success else StatusCodes.SERVER_ERROR
+
+    async def _handle_cover_command(
+        self, device_id: str, cmd_id: str, params: dict | None
+    ) -> StatusCodes:
+        """Handle cover commands."""
+        if cmd_id == cover.Commands.OPEN:
+            success = await self.st_device.execute_command(device_id, "windowShade", "open")
+        elif cmd_id == cover.Commands.CLOSE:
+            success = await self.st_device.execute_command(device_id, "windowShade", "close")
+        elif cmd_id == cover.Commands.STOP:
+            success = await self.st_device.execute_command(device_id, "windowShade", "pause")
+        elif cmd_id == cover.Commands.POSITION:
+            position = params.get("position", 50) if params else 50
+            success = await self.st_device.execute_command(
+                device_id, "windowShadeLevel", "setShadeLevel", [position]
+            )
+        else:
+            _LOG.warning("Unknown cover command: %s", cmd_id)
+            return StatusCodes.NOT_IMPLEMENTED
+
+        return StatusCodes.OK if success else StatusCodes.SERVER_ERROR
+
+    async def _handle_media_player_command(
+        self, device_id: str, cmd_id: str, params: dict | None
+    ) -> StatusCodes:
+        """Handle media player commands."""
+        if cmd_id == media_player.Commands.ON:
+            success = await self.st_device.execute_command(device_id, "switch", "on")
+        elif cmd_id == media_player.Commands.OFF:
+            success = await self.st_device.execute_command(device_id, "switch", "off")
+        elif cmd_id == media_player.Commands.TOGGLE:
+            current = self.st_device.get_device_capability_status(device_id, "switch", "switch")
+            cmd = "off" if current == "on" else "on"
+            success = await self.st_device.execute_command(device_id, "switch", cmd)
+        elif cmd_id == media_player.Commands.VOLUME:
+            volume = params.get("volume", 50) if params else 50
+            success = await self.st_device.execute_command(
+                device_id, "audioVolume", "setVolume", [volume]
+            )
+        elif cmd_id == media_player.Commands.VOLUME_UP:
+            success = await self.st_device.execute_command(
+                device_id, "audioVolume", "volumeUp"
+            )
+        elif cmd_id == media_player.Commands.VOLUME_DOWN:
+            success = await self.st_device.execute_command(
+                device_id, "audioVolume", "volumeDown"
+            )
+        elif cmd_id == media_player.Commands.MUTE_TOGGLE:
+            current = self.st_device.get_device_capability_status(device_id, "audioMute", "mute")
+            cmd = "unmute" if current == "muted" else "mute"
+            success = await self.st_device.execute_command(device_id, "audioMute", cmd)
+        elif cmd_id == media_player.Commands.PLAY_PAUSE:
+            current = self.st_device.get_device_capability_status(
+                device_id, "mediaPlayback", "playbackStatus"
+            )
+            cmd = "pause" if current == "playing" else "play"
+            success = await self.st_device.execute_command(device_id, "mediaPlayback", cmd)
+        elif cmd_id == media_player.Commands.STOP:
+            success = await self.st_device.execute_command(device_id, "mediaPlayback", "stop")
+        elif cmd_id == media_player.Commands.SELECT_SOURCE:
+            source = params.get("source", "") if params else ""
+            success = await self.st_device.execute_command(
+                device_id, "mediaInputSource", "setInputSource", [source]
+            )
+        else:
+            _LOG.warning("Unknown media player command: %s", cmd_id)
+            return StatusCodes.NOT_IMPLEMENTED
+
+        return StatusCodes.OK if success else StatusCodes.SERVER_ERROR
+
+    async def _handle_button_command(
+        self, device_id: str, cmd_id: str, params: dict | None
+    ) -> StatusCodes:
+        """Handle button commands."""
+        if cmd_id == button.Commands.PUSH:
+            success = await self.st_device.execute_command(device_id, "momentary", "push")
+            if not success:
+                success = await self.st_device.execute_command(device_id, "button", "push")
+        else:
+            _LOG.warning("Unknown button command: %s", cmd_id)
+            return StatusCodes.NOT_IMPLEMENTED
+
+        return StatusCodes.OK if success else StatusCodes.SERVER_ERROR
+
+    async def _handle_scene_select_command(
+        self, cmd_id: str, params: dict | None
+    ) -> StatusCodes:
+        """Handle scene select commands."""
+        if cmd_id != SelectCommands.SELECT_OPTION:
+            return StatusCodes.NOT_IMPLEMENTED
+
+        selected = params.get("option") if params else None
+        if not selected:
+            return StatusCodes.BAD_REQUEST
+
+        for scene in self.st_device.scenes:
+            if scene.get("sceneName") == selected:
+                scene_id = scene.get("sceneId")
+                if scene_id:
+                    success = await self.st_device.execute_scene(scene_id)
+                    return StatusCodes.OK if success else StatusCodes.SERVER_ERROR
+
+        return StatusCodes.NOT_FOUND
+
+    async def _handle_mode_select_command(
+        self, cmd_id: str, params: dict | None
+    ) -> StatusCodes:
+        """Handle mode select commands."""
+        if cmd_id != SelectCommands.SELECT_OPTION:
+            return StatusCodes.NOT_IMPLEMENTED
+
+        selected = params.get("option") if params else None
+        if not selected:
+            return StatusCodes.BAD_REQUEST
+
+        for mode in self.st_device.modes:
+            if mode.get("name") == selected:
+                mode_id = mode.get("id")
+                if mode_id:
+                    success = await self.st_device.set_mode(mode_id)
+                    return StatusCodes.OK if success else StatusCodes.SERVER_ERROR
+
+        return StatusCodes.NOT_FOUND
+
+    def update_entity_states(self, device_id: str, status: dict) -> dict[str, dict]:
+        """Update entity states from device status and return changed attributes."""
+        updates = {}
+        components = status.get("components", {})
+        main = components.get("main", {})
+
+        for entity_id, entity in self._entities.items():
+            if device_id not in entity_id:
+                continue
+
+            old_attrs = dict(entity.attributes)
+            new_attrs = {}
+
+            if isinstance(entity, Light):
+                switch_val = main.get("switch", {}).get("switch", {}).get("value")
+                if switch_val:
+                    new_attrs[LightAttrs.STATE] = LightStates.ON if switch_val == "on" else LightStates.OFF
+
+                level = main.get("switchLevel", {}).get("level", {}).get("value")
+                if level is not None:
+                    new_attrs[LightAttrs.BRIGHTNESS] = level
+
+            elif isinstance(entity, Switch):
+                switch_val = main.get("switch", {}).get("switch", {}).get("value")
+                if switch_val:
+                    new_attrs[SwitchAttrs.STATE] = SwitchStates.ON if switch_val == "on" else SwitchStates.OFF
+
+            elif isinstance(entity, Climate):
+                mode = main.get("thermostatMode", {}).get("thermostatMode", {}).get("value")
+                if mode:
+                    if mode == "off":
+                        new_attrs[ClimateAttrs.STATE] = ClimateStates.OFF
+                    elif mode == "heat":
+                        new_attrs[ClimateAttrs.STATE] = ClimateStates.HEAT
+                    elif mode == "cool":
+                        new_attrs[ClimateAttrs.STATE] = ClimateStates.COOL
                     else:
-                        capability, command = 'switch', 'on'
-        
-        elif entity_type == EntityType.LIGHT:
-            if cmd_id == 'on':
-                capability, command = 'switch', 'on'
-            elif cmd_id == 'off':
-                capability, command = 'switch', 'off'
-            elif cmd_id == 'toggle':
-                current_state = entity.attributes.get(LightAttr.STATE)
-                if current_state == LightStates.ON:
-                    capability, command = 'switch', 'off'
-                else:
-                    capability, command = 'switch', 'on'
-        
-        elif entity_type == EntityType.COVER:
-            if cmd_id == 'open':
-                if "doorControl" in capabilities:
-                    capability, command = 'doorControl', 'open'
-                elif "windowShade" in capabilities:
-                    capability, command = 'windowShade', 'open'
-            elif cmd_id == 'close':
-                if "doorControl" in capabilities:
-                    capability, command = 'doorControl', 'close'
-                elif "windowShade" in capabilities:
-                    capability, command = 'windowShade', 'close'
-            elif cmd_id == 'stop':
-                if "doorControl" in capabilities:
-                    capability, command = 'doorControl', 'stop'
-                elif "windowShade" in capabilities:
-                    capability, command = 'windowShade', 'stop'
-        
-        elif entity_type == EntityType.MEDIA_PLAYER:
-            if cmd_id == 'on':
-                capability, command = 'switch', 'on'
-            elif cmd_id == 'off':
-                capability, command = 'switch', 'off'
-            elif cmd_id == 'toggle':
-                current_state = entity.attributes.get(MediaAttr.STATE)
-                if current_state == MediaStates.ON:
-                    capability, command = 'switch', 'off'
-                else:
-                    capability, command = 'switch', 'on'
-            # Add volume control commands
-            elif cmd_id == 'volume_up':
-                if "audioVolume" in capabilities:
-                    capability, command = 'audioVolume', 'volumeUp'
-            elif cmd_id == 'volume_down':
-                if "audioVolume" in capabilities:
-                    capability, command = 'audioVolume', 'volumeDown'
-            elif cmd_id == 'mute_toggle':
-                current_muted = entity.attributes.get(MediaAttr.MUTED, False)
-                _LOG.info(f"Mute toggle: current muted state = {current_muted}")
-                
-                # Priority 1: Use dedicated audioMute capability if available
-                if "audioMute" in capabilities:
-                    if current_muted:
-                        capability, command = 'audioMute', 'unmute'
-                        _LOG.info(f"Using audioMute.unmute for {entity.name}")
+                        new_attrs[ClimateAttrs.STATE] = ClimateStates.AUTO
+
+                temp = main.get("temperatureMeasurement", {}).get("temperature", {}).get("value")
+                if temp is not None:
+                    new_attrs[ClimateAttrs.CURRENT_TEMPERATURE] = temp
+
+            elif isinstance(entity, Cover):
+                shade = main.get("windowShade", {}).get("windowShade", {}).get("value")
+                if shade:
+                    if shade == "open":
+                        new_attrs[CoverAttrs.STATE] = CoverStates.OPEN
+                    elif shade == "closed":
+                        new_attrs[CoverAttrs.STATE] = CoverStates.CLOSED
                     else:
-                        capability, command = 'audioMute', 'mute'
-                        _LOG.info(f"Using audioMute.mute for {entity.name}")
-                # Priority 2: Fall back to audioVolume capability
-                elif "audioVolume" in capabilities:
-                    if current_muted:
-                        capability, command = 'audioVolume', 'unmute'
-                        _LOG.info(f"Using audioVolume.unmute for {entity.name}")
-                    else:
-                        capability, command = 'audioVolume', 'mute'
-                        _LOG.info(f"Using audioVolume.mute for {entity.name}")
-                else:
-                    _LOG.warning(f"No mute capability found for {entity.name}")
-                    
-            elif cmd_id == 'select_source':
-                source_param = params.get('source')
-                if source_param:
-                    # Handle wifi -> network mapping for Samsung soundbars
-                    if source_param.lower() == 'wifi':
-                        _LOG.info(f"Converting 'wifi' to 'network' for Samsung soundbar")
-                        source_param = 'network'
-                    
-                    if "mediaInputSource" in capabilities:
-                        capability, command = 'mediaInputSource', 'setInputSource'
-                        args = [source_param]
-                        _LOG.info(f"Setting input source to: {source_param}")
-                    elif "samsungvd.mediaInputSource" in capabilities:
-                        capability, command = 'samsungvd.mediaInputSource', 'setInputSource'
-                        args = [source_param]
-                        _LOG.info(f"Setting Samsung VD input source to: {source_param}")
-                    else:
-                        _LOG.warning(f"No input source capability found for {entity.name}")
-        
-        elif entity_type == EntityType.CLIMATE:
-            if cmd_id == 'on':
-                capability, command = 'thermostat', 'auto'
-            elif cmd_id == 'off':
-                capability, command = 'thermostat', 'off'
-        
-        elif entity_type == EntityType.BUTTON:
-            if cmd_id == 'push':
-                capability, command = 'momentary', 'push'
-        
-        return capability, command, args
+                        new_attrs[CoverAttrs.STATE] = CoverStates.UNKNOWN
+
+                position = main.get("windowShadeLevel", {}).get("shadeLevel", {}).get("value")
+                if position is not None:
+                    new_attrs[CoverAttrs.POSITION] = position
+
+            elif isinstance(entity, MediaPlayer):
+                switch_val = main.get("switch", {}).get("switch", {}).get("value")
+                if switch_val:
+                    new_attrs[MPAttrs.STATE] = MPStates.ON if switch_val == "on" else MPStates.OFF
+
+                volume = main.get("audioVolume", {}).get("volume", {}).get("value")
+                if volume is not None:
+                    new_attrs[MPAttrs.VOLUME] = volume
+
+                mute = main.get("audioMute", {}).get("mute", {}).get("value")
+                if mute is not None:
+                    new_attrs[MPAttrs.MUTED] = mute == "muted"
+
+            elif isinstance(entity, Sensor):
+                if "temperature" in entity_id:
+                    temp = main.get("temperatureMeasurement", {}).get("temperature", {}).get("value")
+                    if temp is not None:
+                        new_attrs[SensorAttrs.STATE] = SensorStates.ON
+                        new_attrs[SensorAttrs.VALUE] = temp
+                elif "humidity" in entity_id:
+                    humidity = main.get("relativeHumidityMeasurement", {}).get("humidity", {}).get("value")
+                    if humidity is not None:
+                        new_attrs[SensorAttrs.STATE] = SensorStates.ON
+                        new_attrs[SensorAttrs.VALUE] = humidity
+                elif "battery" in entity_id:
+                    battery = main.get("battery", {}).get("battery", {}).get("value")
+                    if battery is not None:
+                        new_attrs[SensorAttrs.STATE] = SensorStates.ON
+                        new_attrs[SensorAttrs.VALUE] = battery
+                elif "motion" in entity_id:
+                    motion = main.get("motionSensor", {}).get("motion", {}).get("value")
+                    if motion is not None:
+                        new_attrs[SensorAttrs.STATE] = SensorStates.ON
+                        new_attrs[SensorAttrs.VALUE] = motion
+                elif "contact" in entity_id:
+                    contact = main.get("contactSensor", {}).get("contact", {}).get("value")
+                    if contact is not None:
+                        new_attrs[SensorAttrs.STATE] = SensorStates.ON
+                        new_attrs[SensorAttrs.VALUE] = contact
+
+            if new_attrs and new_attrs != {k: old_attrs.get(k) for k in new_attrs}:
+                entity.attributes.update(new_attrs)
+                updates[entity_id] = new_attrs
+
+        return updates
+
+    def get_entity(self, entity_id: str) -> Any:
+        """Get an entity by ID."""
+        return self._entities.get(entity_id)
+
+    def get_all_entities(self) -> list[Any]:
+        """Get all entities."""
+        return list(self._entities.values())

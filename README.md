@@ -1,8 +1,8 @@
 # SmartThings Integration for Unfolded Circle Remote 2/3
 
-Control your SmartThings devices seamlessly with your Unfolded Circle Remote 2 or Remote 3 with comprehensive device support, **OAuth2 authentication**, and **smart polling system**.
+Control your Samsung SmartThings smart home devices directly from your Unfolded Circle Remote 2 or Remote 3 with comprehensive device control, **real-time state monitoring**, and **OAuth2-based secure authentication**.
 
-![SmartThings](https://img.shields.io/badge/SmartThings-Cloud%20API-blue)
+![SmartThings](https://img.shields.io/badge/SmartThings-Smart%20Home-blue)
 [![GitHub Release](https://img.shields.io/github/v/release/mase1981/uc-intg-smartthings?style=flat-square)](https://github.com/mase1981/uc-intg-smartthings/releases)
 ![License](https://img.shields.io/badge/license-MPL--2.0-blue?style=flat-square)
 [![GitHub issues](https://img.shields.io/github/issues/mase1981/uc-intg-smartthings?style=flat-square)](https://github.com/mase1981/uc-intg-smartthings/issues)
@@ -16,10 +16,10 @@ Control your SmartThings devices seamlessly with your Unfolded Circle Remote 2 o
 
 ## Features
 
-This integration provides comprehensive control of your SmartThings ecosystem directly from your Unfolded Circle Remote, supporting a wide range of device types with **OAuth2 authentication** for enhanced security and reliability.
+This integration provides comprehensive control of Samsung SmartThings devices through the official SmartThings REST API with OAuth2 authentication, delivering seamless integration with your Unfolded Circle Remote for complete smart home control.
 
 ---
-## ❤️ Support Development ❤️
+## Support Development
 
 If you find this integration useful, consider supporting development:
 
@@ -27,62 +27,134 @@ If you find this integration useful, consider supporting development:
 [![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-FFDD00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black)](https://www.buymeacoffee.com/meirmiyara)
 [![PayPal](https://img.shields.io/badge/PayPal-00457C?style=for-the-badge&logo=paypal&logoColor=white)](https://paypal.me/mmiyara)
 
-Your support helps maintain this integration. Thank you! ❤️
+Your support helps maintain this integration. Thank you!
+
 ---
 
-## Important Note
+### Supported Device Types
 
-Due to SmartThings architecture, this integration uses polling rather than webhooks. There will be a delay (3-20 seconds) between state changes and remote display updates. This is a necessary trade-off to provide a free/open-source integration without requiring a public-facing SmartApp.
+| Device Type | Entity | Features |
+|-------------|--------|----------|
+| **Lights** | Light | On/Off, Brightness, Color Temperature, RGB Color |
+| **Switches** | Switch | On/Off |
+| **Thermostats** | Climate | Temperature, HVAC Mode, Fan Mode |
+| **Blinds/Shades** | Cover | Open/Close, Position |
+| **TVs/Speakers** | Media Player | On/Off, Volume, Mute, Source |
+| **Sensors** | Sensor | Temperature, Humidity, Motion, Contact, Battery |
+| **Scenes** | Select | Execute SmartThings Scenes |
+| **Modes** | Select | Set SmartThings Location Modes |
+| **Buttons** | Button | Press to execute scene |
 
-### 📱 **Supported Device Types**
+### Light Control
 
-| Device Type | Control Features | Status Updates | Examples |
-|-------------|-----------------|----------------|----------|
-| **Smart Lights** | On/Off, Dim, Color, Color Temp | Real-time | Philips Hue, LIFX, Sengled |
-| **Smart Switches** | On/Off, Toggle | Real-time | TP-Link Kasa, Leviton, GE |
-| **Smart Locks** | Lock/Unlock (as Switch) | Real-time | August, Yale, Schlage |
-| **Thermostats** | Temp, Mode, Fan | Real-time | Ecobee, Honeywell |
-| **Garage Doors** | Open/Close/Stop | Real-time | MyQ, Linear GoControl |
-| **Smart TVs** | Power, Volume | Real-time | Samsung, LG SmartThings |
-| **Sensors** | Status Monitoring | Real-time | Motion, Contact, Temp |
-| **Buttons** | Press Actions | Event-based | SmartThings Button |
+- **On/Off** - Toggle light state
+- **Brightness** - Adjust brightness level (0-100%)
+- **Color Temperature** - Warm to cool white adjustment
+- **RGB Color** - Full color control for color-capable lights
+- **Real-time Updates** - Instant state feedback via polling
 
-### ⚡ **Advanced Features**
+### Switch Control
 
-#### **Smart Polling System**
-- **Adaptive Intervals** - Faster polling for recently changed devices
-- **Activity-Based** - High activity = 3sec intervals, Low activity = 20sec intervals
-- **Resource Efficient** - Minimizes API calls while maintaining responsiveness
-- **Batch Processing** - Optimized API usage with intelligent batching
+- **On/Off** - Toggle switch state
+- **Real-time Updates** - Instant state feedback
 
-#### **OAuth2 Security**
-- **Secure Authentication** - Industry-standard OAuth2 flow
-- **Token Management** - Automatic token refresh and renewal
-- **SmartApp Integration** - Uses your own SmartApp for enhanced control
-- **Permission Control** - Fine-grained access control through SmartThings
+### Climate Control
 
-### **Protocol Requirements**
+- **Temperature** - Set target temperature
+- **HVAC Mode** - Heat, Cool, Auto, Off
+- **Fan Mode** - Auto, Low, Medium, High
+- **Current Temperature** - Real-time reading
+- **Humidity** - Current humidity level (if supported)
 
-- **Protocol**: SmartThings Cloud API
-- **Authentication**: OAuth2 with SmartApp
-- **Internet Required**: Cloud-based integration
-- **Network Access**: Outbound HTTPS (port 443)
-- **Connection**: Smart polling with adaptive intervals
+### Cover Control
 
-### **Network Requirements**
+- **Open/Close** - Fully open or close
+- **Position** - Set specific position (0-100%)
+- **Stop** - Stop current movement
 
-- **Internet Connection** - Required for SmartThings Cloud API access
-- **HTTPS Access** - Outbound HTTPS traffic on port 443
-- **Bandwidth** - Minimal (~1KB per device per minute)
-- **Latency** - Works well with 200ms+ internet latency
+### Media Player Control
+
+- **On/Off** - Power control
+- **Volume** - Volume level adjustment
+- **Mute** - Toggle mute state
+- **Source** - Input source selection
+- **Playback** - Play, Pause, Stop, Next, Previous
+
+### Sensor Monitoring
+
+| Sensor Type | Description |
+|-------------|-------------|
+| Temperature | Current temperature reading |
+| Humidity | Relative humidity percentage |
+| Motion | Motion detected / Clear |
+| Contact | Open / Closed state |
+| Battery | Battery level percentage |
+| Presence | Present / Away |
+| Power | Energy consumption |
+
+### Scenes & Modes (NEW in v3.0)
+
+- **Scenes** - Select entity to execute any SmartThings scene
+- **Modes** - Select entity to switch between location modes (Home, Away, Night, etc.)
+- **Button Entities** - Quick-press buttons for favorite scenes
+
+### Protocol Requirements
+
+- **Protocol**: SmartThings REST API v1
+- **Authentication**: OAuth2 (Authorization Code Flow)
+- **Connection**: Cloud-based with polling for state updates
+- **Polling Interval**: Configurable (default 10 seconds)
+- **Rate Limiting**: Built-in protection (8 requests per 10 seconds)
+
+### Network Requirements
+
+- **Internet Access** - Required for SmartThings cloud API
+- **HTTPS Protocol** - Secure OAuth2 authentication
+- **SmartThings Account** - Samsung account with SmartThings
+
+---
+
+## Prerequisites
+
+Before installing this integration, you need to create a SmartThings OAuth2 application:
+
+### Step 1: Create SmartThings Developer Account
+
+1. Go to [SmartThings Developer Workspace](https://smartthings.developer.samsung.com/workspace/projects)
+2. Sign in with your Samsung account
+3. Accept the developer terms if prompted
+
+### Step 2: Create OAuth2 Application
+
+1. Click **"New Project"**
+2. Select **"Consumer"** project type
+3. Fill in project details:
+   - **Project Name**: "Unfolded Circle Integration"
+   - **Description**: "Control SmartThings from UC Remote"
+4. Click **"Add App Credentials"**
+5. Configure OAuth settings:
+   - **OAuth Client ID**: Auto-generated (copy this)
+   - **OAuth Client Secret**: Click to reveal and copy
+   - **Redirect URI**: Add `https://httpbin.org/get`
+   - **Scopes**: Select:
+     - `r:devices:*` - Read devices
+     - `x:devices:*` - Execute device commands
+     - `r:locations:*` - Read locations
+     - `r:scenes:*` - Read scenes
+     - `x:scenes:*` - Execute scenes
+
+6. Save your **Client ID** and **Client Secret** securely
+
+---
 
 ## Installation
 
 ### Option 1: Remote Web Interface (Recommended)
+
 1. Navigate to the [**Releases**](https://github.com/mase1981/uc-intg-smartthings/releases) page
-2. Download the latest `uc-intg-smartthings-<version>.tar.gz` file
+2. Download the latest `uc-intg-smartthings-<version>-aarch64.tar.gz` file
 3. Open your remote's web interface (`http://your-remote-ip`)
-4. Go to **Settings** → **Integrations** → **Add Integration**
+4. Go to **Settings** > **Integrations** > **Add Integration**
 5. Click **Upload** and select the downloaded `.tar.gz` file
 
 ### Option 2: Docker (Advanced Users)
@@ -110,108 +182,136 @@ services:
 
 **Docker Run:**
 ```bash
-docker run -d --name uc-smartthings --restart unless-stopped --network host -v smartthings-config:/app/config -e UC_CONFIG_HOME=/app/config -e UC_INTEGRATION_INTERFACE=0.0.0.0 -e UC_INTEGRATION_HTTP_PORT=9090 -e PYTHONPATH=/app ghcr.io/mase1981/uc-intg-smartthings:latest
+docker run -d --name uc-smartthings --restart unless-stopped --network host \
+  -v smartthings-config:/app/config \
+  -e UC_CONFIG_HOME=/app/config \
+  -e UC_INTEGRATION_INTERFACE=0.0.0.0 \
+  -e UC_INTEGRATION_HTTP_PORT=9090 \
+  -e PYTHONPATH=/app \
+  ghcr.io/mase1981/uc-intg-smartthings:latest
 ```
 
 ## Configuration
 
-### Prerequisites
+### Step 1: Start Setup
 
-- SmartThings account with configured devices
-- Internet connection for cloud API access
-- Node.js and SmartThings CLI (for SmartApp creation)
-- Developer Account on SmartThings Developer Portal
+1. After installation, go to **Settings** > **Integrations**
+2. The SmartThings integration should appear in **Available Integrations**
+3. Click **"Configure"** to begin setup
 
-### Step 1: Create SmartApp
+### Step 2: Enter OAuth Credentials
 
-**Important**: Every user must create their own SmartApp with unique credentials.
+1. Enter your **OAuth Client ID** from SmartThings Developer Workspace
+2. Enter your **OAuth Client Secret**
+3. Click **Next**
 
-1. **Install SmartThings CLI**:
-   ```bash
-   npm install -g @smartthings/cli
-   ```
+### Step 3: Authorize SmartThings
 
-2. **Create SmartApp**:
-   ```bash
-   smartthings apps:create
-   ```
+1. You will see an authorization URL
+2. Open this URL in a web browser on your phone or computer
+3. Log in with your Samsung account
+4. Authorize the application
+5. You will be redirected to `https://httpbin.org/get?code=XXXXX`
+6. Copy the **code** parameter from the URL
+7. Paste the authorization code in the Remote setup
 
-3. **Follow prompts**:
-   - Display name: `UC Integration SmartThings`
-   - Description: `Unfolded Circle Integration SmartApp`
-   - Skip icon and target URL (press Enter)
+### Step 4: Select Location and Device Types
 
-4. **CRITICAL - Select OAuth2 Scopes**:
-   Must select these exact scopes:
-   - ✅ `r:devices:*` (Read all devices)
-   - ✅ `w:devices:*` (Write to all devices)
-   - ✅ `x:devices:*` (Execute commands)
-   - ✅ `r:locations:*` (Read locations)
-   - ✅ `w:locations:*` (Write locations)
-   - ✅ `x:locations:*` (Execute location commands)
-   - ❌ DO NOT select scopes with `$` symbols
+1. Select your SmartThings **Location** from the dropdown
+2. Choose which device types to include:
+   - Lights
+   - Switches
+   - Sensors
+   - Climate
+   - Covers
+   - Media Players
+3. Click **Complete Setup**
 
-5. **Redirect URI**:
-   Use exactly: `https://httpbin.org/get`
+### Step 5: Configure Entities
 
-6. **Save Credentials**:
-   Copy and save the OAuth Client ID and OAuth Client Secret
+The integration will create entities for all compatible devices:
+- Lights, switches, climate, covers, media players
+- Sensors for temperature, humidity, motion, contact
+- Select entities for scenes and modes
+- Button entities for quick scene activation
 
-### Step 2: Configure Integration
-
-1. Install the integration on your UC Remote
-2. Go to **Settings** → **Integrations** → SmartThings
-3. Click **"Configure"**
-
-#### **Enter Client Credentials**:
-- Client ID: Paste OAuth Client ID from SmartApp
-- Client Secret: Paste OAuth Client Secret from SmartApp
-- Click **"Next"**
-
-#### **Authorization Flow**:
-- Browser opens with authorization URL
-- Log in to SmartThings
-- Select your HOME
-- Click "Authorize"
-- Copy the authorization code from the redirect URL
-- Paste code back into integration setup
-
-#### **Device Selection**:
-- Select SmartThings location
-- Choose device types to include:
-  - Lights, Switches, Climate, Covers, Media Players, Buttons, Sensors
-
-#### **Complete Setup**:
-- Click **"Complete Setup"**
-- Integration creates entities for all discovered devices
+---
 
 ## Using the Integration
 
-### Device Control
+### Light Entities
 
-The integration automatically creates appropriate entities for each SmartThings device:
+Control smart lights with full feature support:
+- Toggle on/off from activities or directly
+- Adjust brightness with slider
+- Change color temperature
+- Set RGB color (if supported)
 
-- **Lights**: On/Off, Dimming, Color, Color Temperature
-- **Switches**: On/Off, Toggle control
-- **Climate**: Temperature, Mode, Fan controls
-- **Covers**: Open/Close/Stop commands
-- **Media Players**: Power, Volume control
-- **Sensors**: Real-time status monitoring
-- **Buttons**: Press action support
+### Climate Entities
 
-### Performance
+Control thermostats and HVAC:
+- Set target temperature
+- Switch between heat/cool/auto modes
+- Adjust fan speed
+- View current temperature and humidity
 
-- **Response Time**: 0.6-1.2 seconds average
-- **Status Updates**: 3-20 second delay (adaptive polling)
-- **API Optimization**: Smart rate limiting and batching
-- **Network**: Handles latency and interruptions gracefully
+### Sensor Entities
+
+Monitor environmental sensors:
+- Temperature sensors show current readings
+- Motion sensors show detected/clear state
+- Contact sensors show open/closed state
+- Battery sensors show charge level
+
+### Scene Selection (NEW)
+
+Execute SmartThings scenes via Select entity:
+- Shows all available scenes in your location
+- Choose a scene to execute it immediately
+- Perfect for "Good Night" or "Movie Time" scenes
+
+### Mode Selection (NEW)
+
+Switch between location modes via Select entity:
+- Home, Away, Night modes
+- Custom modes you've created
+- Affects all automations tied to modes
+
+---
+
+## Troubleshooting
+
+### Authorization Failed
+
+- Verify Client ID and Client Secret are correct
+- Ensure redirect URI is exactly `https://httpbin.org/get`
+- Check that all required scopes are selected
+
+### Devices Not Appearing
+
+- Verify devices are in the selected location
+- Check device type filters in setup
+- Some device types may not be supported yet
+
+### Commands Not Working
+
+- Check device is online in SmartThings app
+- Verify OAuth scopes include execute permissions
+- Check device supports the command capability
+
+### Token Refresh Errors
+
+- Tokens are refreshed automatically before expiration
+- If persistent issues, re-run setup flow
+- Check SmartThings developer workspace for app status
+
+---
 
 ## Credits
 
 - **Developer**: Meir Miyara
-- **SmartThings**: Samsung SmartThings Platform
+- **Samsung SmartThings**: Smart home platform and API
 - **Unfolded Circle**: Remote 2/3 integration framework (ucapi)
-- **Protocol**: SmartThings Cloud API with OAuth2
 - **Community**: Testing and feedback from UC community
 
 ## License
@@ -227,6 +327,6 @@ This project is licensed under the Mozilla Public License 2.0 (MPL-2.0) - see LI
 
 ---
 
-**Made with ❤️ for the Unfolded Circle and SmartThings Communities**
+**Made with love for the Unfolded Circle and SmartThings Communities**
 
 **Thank You**: Meir Miyara

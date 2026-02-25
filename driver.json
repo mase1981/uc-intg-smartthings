@@ -1,40 +1,38 @@
 {
   "driver_id": "smartthings",
-  "version": "2.0.13",
-  "min_core_api": "0.21.0",
+  "version": "3.0.0",
+  "min_core_api": "0.22.0",
   "name": {
     "en": "SmartThings"
   },
-  "icon": "uc:spinner",
+  "icon": "custom:smartthings-logo.png",
   "description": {
-    "en": "Control your SmartThings devices with Unfolded Circle Remote"
+    "en": "Samsung SmartThings integration for controlling lights, switches, sensors, climate, covers, and media players"
   },
   "developer": {
     "name": "Meir Miyara",
-    "email": "meir.miyara@gmail.com",
-    "url": "https://github.com/mase1981"
+    "email": "meir.miyara@gmail.com"
   },
   "home_page": "https://github.com/mase1981/uc-intg-smartthings",
+  "release_date": "2026-02-25",
   "setup_data_schema": {
     "title": {
-      "en": "SmartThings OAuth2 Setup"
+      "en": "SmartThings Setup"
     },
     "settings": [
       {
-        "id": "oauth_info",
+        "id": "info",
         "label": {
-          "en": "OAuth2 SmartApp Integration"
+          "en": "Setup information"
         },
         "field": {
           "label": {
             "value": {
-              "en": "This integration uses OAuth2 with your SmartApp.\n\nYou'll need:\n1. Your SmartApp's Client ID\n2. Your SmartApp's Client Secret\n3. To authorize the integration with SmartThings\n\nClick 'Setup' to begin!"
+              "en": "This integration connects to Samsung SmartThings via OAuth2. You will need to create an OAuth2 application in the SmartThings Developer Portal to get your Client ID and Client Secret."
             }
           }
         }
       }
     ]
-  },
-  "release_date": "2025-01-19",
-  "port": 9090
+  }
 }

@@ -1,22 +1,18 @@
-# .github/workflows/build.yml
-
-# Manual triggered GitHub action to build a distribution binary of the Python integration driver and attach it to a release draft including a hash file
----
 name: "Build & Draft Release"
 
-on:
-  workflow_dispatch:
+"on":
+  push:
+    tags:
+      - "v*"
 
 env:
   INTG_NAME: smartthings
-  # Python version to use in the builder image. See https://hub.docker.com/r/unfoldedcircle/r2-pyinstaller for possible versions.
   PYTHON_VER: 3.11.12-0.3.0
 
 jobs:
   build:
     name: Build Release
     runs-on: ubuntu-24.04
-    #Save version to env output variable to be able to use it in the following release job as a tag
     outputs:
       version: ${{ steps.get-version-and-id.outputs.VERSION }}
       driver_id: ${{ steps.get-version-and-id.outputs.DRIVER_ID }}
@@ -24,52 +20,63 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          # History of 200 should be more than enough to calculate commit count since last release tag
           fetch-depth: 200
 
       - name: Get version and id
-        #Id needed for env output variable
         id: get-version-and-id
         run: |
-          echo "VERSION=$(jq .version -r driver.json)" >> $GITHUB_ENV
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
           echo "DRIVER_ID=$(jq .driver_id -r driver.json)" >> $GITHUB_ENV
-          # Save to Github output to later use it in Create Release job
-          echo "VERSION=$(jq .version -r driver.json)" >> $GITHUB_OUTPUT
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
           echo "DRIVER_ID=$(jq .driver_id -r driver.json)" >> $GITHUB_OUTPUT
 
       - name: Build
         run: |
           sudo apt-get update && sudo apt-get install -y qemu-system-arm binfmt-support qemu-user-static
           docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
-          echo "Starting pyinstaller build"
+          echo "Starting pyinstaller build for driver_id: ${DRIVER_ID}"
           docker run --rm --name builder \
-            --platform=aarch64 \
+            --platform=linux/arm64 \
             --user=$(id -u):$(id -g) \
             -v ${GITHUB_WORKSPACE}:/workspace \
             docker.io/unfoldedcircle/r2-pyinstaller:${PYTHON_VER} \
             bash -c \
             "cd /workspace && \
               python -m pip install -r requirements.txt && \
-              pyinstaller --clean --onedir --name intg-${DRIVER_ID} \
+              pyinstaller --clean --onedir --name driver \
+                --add-data driver.json:. \
                 --collect-all zeroconf \
-                uc_intg_${INTG_NAME}/driver.py"
+                --collect-all ucapi \
+                --collect-all ucapi_framework \
+                --hidden-import uc_intg_${INTG_NAME}.driver \
+                --hidden-import uc_intg_${INTG_NAME}.device \
+                --hidden-import uc_intg_${INTG_NAME}.config \
+                --hidden-import uc_intg_${INTG_NAME}.client \
+                --hidden-import uc_intg_${INTG_NAME}.setup_flow \
+                --hidden-import uc_intg_${INTG_NAME}.entities \
+                --paths . \
+                uc_intg_${INTG_NAME}/__init__.py"
 
       - name: Prepare artifacts
         shell: bash
         run: |
           mkdir -p artifacts/bin
-          # Move all the contents of the pyinstaller build dir to our bin dir
-          mv dist/intg-${{ env.DRIVER_ID }}/* artifacts/bin
-          # Rename the main executable to 'driver'
-          mv artifacts/bin/intg-${{ env.DRIVER_ID }} artifacts/bin/driver
+          mv dist/driver/* artifacts/bin/
           cp driver.json artifacts/
+          # Copy icon file to archive root (required format: custom:$ICON_FILENAME)
+          [[ -f assets/smartthings-logo.png ]] && cp assets/smartthings-logo.png artifacts/
           echo "ARTIFACT_NAME=uc-intg-${{ env.DRIVER_ID }}-${{ env.VERSION }}-aarch64" >> $GITHUB_ENV
+          echo "=== Artifact structure ==="
+          ls -laR artifacts/
 
       - name: Create upload artifact archive
         shell: bash
         run: |
           tar czvf ${{ env.ARTIFACT_NAME }}.tar.gz -C ${GITHUB_WORKSPACE}/artifacts .
-          ls -lah
+          echo "=== Archive contents ==="
+          tar tzvf ${{ env.ARTIFACT_NAME }}.tar.gz
+          ls -lah ${{ env.ARTIFACT_NAME }}.tar.gz
 
       - uses: actions/upload-artifact@v4
         id: upload_artifact
@@ -79,10 +86,49 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
+  docker:
+    name: Build and Push Docker Image
+    runs-on: ubuntu-24.04
+    needs: [build]
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/uc-intg-smartthings
+          tags: |
+            type=ref,event=tag
+            type=raw,value=latest
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
   release:
     name: Create Release
     runs-on: ubuntu-24.04
-    needs: [build]
+    needs: [build, docker]
     permissions:
       contents: write
 
@@ -93,17 +139,17 @@ jobs:
       - name: Extract build archives from downloaded files
         run: |
           ls -R
-          # extract tar.gz build archives from downloaded artifacts
-          # (wrapped in tar from actions/upload-artifact, then extracted into a directory by actions/download-artifact)
-          for D in *
-            do if [ -d "${D}" ]; then
-              mv $D/* ./
+          for D in *; do
+            if [ -d "${D}" ]; then
+              mv "${D}"/* ./
             fi
-          done;
+          done
 
       - name: Create hash file
         run: |
-          for filename in *.tar.gz; do echo "sha256  `sha256sum $filename`" >> ${{needs.build.outputs.driver_id}}.hash; done;
+          for filename in *.tar.gz; do
+            echo "sha256 $(sha256sum "$filename")" >> ${{needs.build.outputs.driver_id}}.hash
+          done
 
       - name: Create release draft
         uses: ncipollo/release-action@v1

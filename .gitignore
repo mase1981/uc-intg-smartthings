@@ -28,8 +28,6 @@ share/python-wheels/
 MANIFEST
 
 # PyInstaller
-#  Usually these files are written by a python script from a template
-#  before PyInstaller builds the exe, so as to inject date/other infos into it.
 *.manifest
 *.spec
 
@@ -55,6 +53,7 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+/tools
 
 # Spyder project settings
 .spyderproject
@@ -74,11 +73,6 @@ dmypy.json
 # Configuration files (contain sensitive data)
 config.json
 *.log
-test*
-diagnostics.py
-smartthings_diagnostics_20250824_164003.json
-standalone_diagnostic.py
-smartthings_config.json
 
 # OS generated files
 .DS_Store
@@ -91,4 +85,27 @@ Thumbs.db
 
 # Integration specific
 artifacts/
-tools/
+
+# AI Tools
+Claude/
+.claude/
+simulator/
+tests/
+nul
+*.tar.gz
+test_results/
+
+# Documentation and release notes (keep local only)
+RELEASE_NOTES_*.md
+BUGFIX_REPORT_*.md
+VALIDATION_REPORT*.md
+
+# Test and validation scripts (keep local only)
+test_*.py
+validate_*.py
+
+# Temporary files
+tmpclaude-*
+
+# Development data
+data/

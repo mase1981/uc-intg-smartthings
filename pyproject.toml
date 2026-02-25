@@ -1,61 +1,27 @@
-# pyproject.toml
-[build-system]
-requires = ["setuptools>=45", "wheel", "setuptools_scm[toml]>=6.2"]
-build-backend = "setuptools.build_meta"
-
 [project]
 name = "uc-intg-smartthings"
-description = "SmartThings Integration for Unfolded Circle Remote 2/3"
+dynamic = ["version"]
+description = "Samsung SmartThings integration for Unfolded Circle Remote"
 authors = [
-    {name = "Meir Miyara", email = "meir.miyara@gmail.com"},
+    {name = "Meir Miyara", email = "meir.miyara@gmail.com"}
 ]
 readme = "README.md"
+requires-python = ">=3.11"
 license = {text = "MPL-2.0"}
-requires-python = ">=3.9"
-classifiers = [
-    "Development Status :: 4 - Beta",
-    "Intended Audience :: End Users/Desktop", 
-    "License :: OSI Approved :: Mozilla Public License 2.0 (MPL 2.0)",
-    "Operating System :: OS Independent",
-    "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
-]
+
 dependencies = [
-    "ucapi>=0.3.1",
-    "aiohttp>=3.8.0,<4.0.0",
-]
-dynamic = ["version"]
-
-[project.optional-dependencies]
-dev = [
-    "pytest>=7.0.0",
-    "pytest-asyncio>=0.21.0", 
-    "black>=22.0.0",
-    "isort>=5.10.0",
-    "mypy>=1.0.0",
-    "structlog>=22.0.0",
+    "ucapi-framework>=1.8.4",
+    "ucapi>=0.5.2",
+    "aiohttp>=3.9.0",
+    "certifi>=2023.0.0",
 ]
 
-[project.urls]
-"Homepage" = "https://github.com/mase1981/uc-intg-smartthings"
-"Bug Reports" = "https://github.com/mase1981/uc-intg-smartthings/issues"
-"Source" = "https://github.com/mase1981/uc-intg-smartthings"
+[build-system]
+requires = ["setuptools>=65.0", "wheel"]
+build-backend = "setuptools.build_meta"
 
-[tool.setuptools_scm]
-write_to = "uc_intg_smartthings/_version.py"
+[tool.setuptools]
+packages = ["uc_intg_smartthings"]
 
-[tool.black]
-line-length = 120
-target-version = ['py39']
-
-[tool.isort]
-profile = "black"
-line_length = 120
-
-[tool.mypy]
-python_version = "3.9"
-warn_return_any = true
-warn_unused_configs = true
+[tool.setuptools.dynamic]
+version = {attr = "uc_intg_smartthings.__version__"}

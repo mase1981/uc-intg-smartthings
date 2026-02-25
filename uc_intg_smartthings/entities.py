@@ -506,6 +506,32 @@ class SmartThingsEntityFactory:
                     device_class=SensorDeviceClasses.ENERGY,
                     area=area,
                 )
+            elif sensor_type == "illuminance":
+                sensor_entity = Sensor(
+                    entity_id,
+                    sensor_name,
+                    features=[],
+                    attributes={
+                        SensorAttrs.STATE: SensorStates.UNKNOWN,
+                        SensorAttrs.VALUE: None,
+                    },
+                    device_class=SensorDeviceClasses.CUSTOM,
+                    options={SensorOptions.CUSTOM_UNIT: "lux"},
+                    area=area,
+                )
+            elif sensor_type in ("motion", "contact", "presence"):
+                sensor_entity = Sensor(
+                    entity_id,
+                    sensor_name,
+                    features=[],
+                    attributes={
+                        SensorAttrs.STATE: SensorStates.UNKNOWN,
+                        SensorAttrs.VALUE: None,
+                    },
+                    device_class=SensorDeviceClasses.CUSTOM,
+                    options={SensorOptions.CUSTOM_UNIT: sensor_type},
+                    area=area,
+                )
             else:
                 sensor_entity = Sensor(
                     entity_id,
@@ -515,7 +541,7 @@ class SmartThingsEntityFactory:
                         SensorAttrs.STATE: SensorStates.UNKNOWN,
                         SensorAttrs.VALUE: None,
                     },
-                    device_class=SensorDeviceClasses.BINARY,
+                    device_class=SensorDeviceClasses.CUSTOM,
                     options={SensorOptions.CUSTOM_UNIT: sensor_type},
                     area=area,
                 )
@@ -745,11 +771,29 @@ class SmartThingsEntityFactory:
     async def _handle_scene_select_command(
         self, cmd_id: str, params: dict | None
     ) -> StatusCodes:
-        """Handle scene select commands."""
-        if cmd_id != SelectCommands.SELECT_OPTION:
+        """Handle scene select commands (ucapi 0.5.2 full command support)."""
+        scene_names = [s.get("sceneName", "Unknown") for s in self.config.scenes]
+        if not scene_names:
+            return StatusCodes.NOT_FOUND
+
+        entity_id = f"select.st_{self.config.identifier}_scenes"
+        entity = self._entities.get(entity_id)
+        current = entity.attributes.get(SelectAttrs.CURRENT_OPTION) if entity else scene_names[0]
+        current_idx = scene_names.index(current) if current in scene_names else 0
+
+        if cmd_id == SelectCommands.SELECT_OPTION:
+            selected = params.get("option") if params else None
+        elif cmd_id == SelectCommands.SELECT_FIRST:
+            selected = scene_names[0]
+        elif cmd_id == SelectCommands.SELECT_LAST:
+            selected = scene_names[-1]
+        elif cmd_id == SelectCommands.SELECT_NEXT:
+            selected = scene_names[(current_idx + 1) % len(scene_names)]
+        elif cmd_id == SelectCommands.SELECT_PREVIOUS:
+            selected = scene_names[(current_idx - 1) % len(scene_names)]
+        else:
             return StatusCodes.NOT_IMPLEMENTED
 
-        selected = params.get("option") if params else None
         if not selected:
             return StatusCodes.BAD_REQUEST
 
@@ -758,6 +802,8 @@ class SmartThingsEntityFactory:
                 scene_id = scene.get("sceneId")
                 if scene_id:
                     success = await self.st_device.execute_scene(scene_id)
+                    if success and entity:
+                        entity.attributes[SelectAttrs.CURRENT_OPTION] = selected
                     return StatusCodes.OK if success else StatusCodes.SERVER_ERROR
 
         return StatusCodes.NOT_FOUND
@@ -765,11 +811,29 @@ class SmartThingsEntityFactory:
     async def _handle_mode_select_command(
         self, cmd_id: str, params: dict | None
     ) -> StatusCodes:
-        """Handle mode select commands."""
-        if cmd_id != SelectCommands.SELECT_OPTION:
+        """Handle mode select commands (ucapi 0.5.2 full command support)."""
+        mode_names = [m.get("name", "Unknown") for m in self.config.modes]
+        if not mode_names:
+            return StatusCodes.NOT_FOUND
+
+        entity_id = f"select.st_{self.config.identifier}_modes"
+        entity = self._entities.get(entity_id)
+        current = entity.attributes.get(SelectAttrs.CURRENT_OPTION) if entity else mode_names[0]
+        current_idx = mode_names.index(current) if current in mode_names else 0
+
+        if cmd_id == SelectCommands.SELECT_OPTION:
+            selected = params.get("option") if params else None
+        elif cmd_id == SelectCommands.SELECT_FIRST:
+            selected = mode_names[0]
+        elif cmd_id == SelectCommands.SELECT_LAST:
+            selected = mode_names[-1]
+        elif cmd_id == SelectCommands.SELECT_NEXT:
+            selected = mode_names[(current_idx + 1) % len(mode_names)]
+        elif cmd_id == SelectCommands.SELECT_PREVIOUS:
+            selected = mode_names[(current_idx - 1) % len(mode_names)]
+        else:
             return StatusCodes.NOT_IMPLEMENTED
 
-        selected = params.get("option") if params else None
         if not selected:
             return StatusCodes.BAD_REQUEST
 
@@ -778,6 +842,8 @@ class SmartThingsEntityFactory:
                 mode_id = mode.get("id")
                 if mode_id:
                     success = await self.st_device.set_mode(mode_id)
+                    if success and entity:
+                        entity.attributes[SelectAttrs.CURRENT_OPTION] = selected
                     return StatusCodes.OK if success else StatusCodes.SERVER_ERROR
 
         return StatusCodes.NOT_FOUND

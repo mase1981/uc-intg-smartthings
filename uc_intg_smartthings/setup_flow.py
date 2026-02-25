@@ -110,6 +110,21 @@ class SmartThingsSetupFlow(BaseSetupFlow[SmartThingsConfig]):
             ],
         )
 
+    async def _handle_discovery(self) -> SetupAction:
+        """Handle device discovery - use collected OAuth data to finalize setup."""
+        if self._pre_discovery_data and self._pre_discovery_data.get("location_id"):
+            _LOG.info("Finalizing setup with collected OAuth data")
+            try:
+                result = await self.query_device(self._pre_discovery_data)
+                if hasattr(result, "identifier"):
+                    return await self._finalize_device_setup(result, self._pre_discovery_data)
+                return result
+            except Exception as err:
+                _LOG.error("Discovery failed: %s", err)
+                return self.get_manual_entry_form()
+
+        return await self._handle_manual_entry()
+
     async def _handle_auth_code_step(self, input_values: dict) -> RequestUserInput:
         """Handle authorization code step - exchange for tokens."""
         auth_code = input_values.get("auth_code", "").strip()

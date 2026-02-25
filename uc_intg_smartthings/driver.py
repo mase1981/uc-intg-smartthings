@@ -25,6 +25,7 @@ devices: dict[str, SmartThingsDevice] = {}
 entity_factories: dict[str, SmartThingsEntityFactory] = {}
 entities_ready: bool = False
 initialization_lock = asyncio.Lock()
+setup_flow: SmartThingsSetupFlow | None = None
 
 
 async def on_token_update(config: SmartThingsConfig) -> None:
@@ -95,7 +96,14 @@ async def on_setup_complete(config: SmartThingsConfig) -> None:
 
 async def driver_setup_handler(request: ucapi.SetupDriver) -> ucapi.SetupAction:
     """Handle driver setup requests."""
-    setup_flow = SmartThingsSetupFlow(on_setup_complete=on_setup_complete)
+    global setup_flow
+
+    if isinstance(request, ucapi.DriverSetupRequest):
+        setup_flow = SmartThingsSetupFlow(on_setup_complete=on_setup_complete)
+
+    if setup_flow is None:
+        setup_flow = SmartThingsSetupFlow(on_setup_complete=on_setup_complete)
+
     return await setup_flow.handle_setup_request(request)
 
 
@@ -162,7 +170,7 @@ async def main() -> None:
     """Main entry point for the SmartThings integration."""
     global config_manager, entities_ready
 
-    _LOG.info("Starting SmartThings integration v3.0.0")
+    _LOG.info("Starting SmartThings integration v3.0.2")
 
     config_manager = SmartThingsConfigManager(
         api.config_dir_path,

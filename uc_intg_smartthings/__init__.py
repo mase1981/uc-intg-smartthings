@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 SmartThings Integration for Unfolded Circle Remote Two/3.
 
@@ -9,9 +8,15 @@ SmartThings Integration for Unfolded Circle Remote Two/3.
 import asyncio
 import json
 import logging
+import os
 from pathlib import Path
 
-logging.getLogger(__name__).addHandler(logging.NullHandler())
+from ucapi import DeviceStates
+from ucapi_framework import get_config_path, BaseConfigManager
+
+from uc_intg_smartthings.config import SmartThingsConfig
+from uc_intg_smartthings.driver import SmartThingsDriver
+from uc_intg_smartthings.setup_flow import SmartThingsSetupFlow
 
 try:
     driver_path = Path(__file__).parent.parent / "driver.json"
@@ -23,19 +28,55 @@ except (FileNotFoundError, json.JSONDecodeError, KeyError):
 
 __all__ = ["__version__"]
 
+_LOG = logging.getLogger(__name__)
 
-def main() -> None:
-    """Main entry point for the SmartThings integration."""
-    from uc_intg_smartthings.driver import main as driver_main
 
+async def main():
+    """Main entry point."""
     logging.basicConfig(
-        level=logging.DEBUG,
-        format="%(asctime)s | %(name)-40s | %(levelname)-8s | %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
+        level=logging.INFO,
+        format="%(asctime)s | %(levelname)-8s | %(name)-20s | %(message)s",
     )
 
-    asyncio.run(driver_main())
+    _LOG.info("Starting SmartThings Integration v%s", __version__)
+
+    try:
+        driver = SmartThingsDriver()
+
+        config_path = get_config_path(driver.api.config_dir_path or "")
+        _LOG.info("Using configuration path: %s", config_path)
+
+        config_manager = BaseConfigManager(
+            config_path,
+            add_handler=driver.on_device_added,
+            remove_handler=driver.on_device_removed,
+            config_class=SmartThingsConfig,
+        )
+        driver.config_manager = config_manager
+
+        setup_handler = SmartThingsSetupFlow.create_handler(driver)
+
+        driver_path = os.path.join(os.path.dirname(__file__), "..", "driver.json")
+        await driver.api.init(os.path.abspath(driver_path), setup_handler)
+
+        await driver.register_all_configured_devices(connect=False)
+
+        device_count = len(list(config_manager.all()))
+        if device_count > 0:
+            await driver.api.set_device_state(DeviceStates.CONNECTED)
+        else:
+            await driver.api.set_device_state(DeviceStates.DISCONNECTED)
+
+        _LOG.info("SmartThings integration started")
+
+        await asyncio.Future()
+
+    except KeyboardInterrupt:
+        _LOG.info("Integration stopped by user")
+    except Exception as err:
+        _LOG.critical("Fatal error: %s", err, exc_info=True)
+        raise
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

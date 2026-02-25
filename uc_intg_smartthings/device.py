@@ -7,46 +7,31 @@ SmartThings device wrapper with polling support.
 
 import asyncio
 import logging
-from enum import IntEnum
 from typing import Any
 
 from pyee.asyncio import AsyncIOEventEmitter
+from ucapi_framework.device import DeviceEvents
 
 from uc_intg_smartthings.client import SmartThingsClient, SmartThingsAPIError
-from uc_intg_smartthings.config import SmartThingsConfig, OAuth2Tokens
+from uc_intg_smartthings.config import SmartThingsConfig
 
 _LOG = logging.getLogger(__name__)
-
-
-class DeviceEvents(IntEnum):
-    """Device events."""
-
-    CONNECTED = 1
-    DISCONNECTED = 2
-    UPDATE = 3
-    ERROR = 4
 
 
 class SmartThingsDevice:
     """SmartThings device wrapper with polling support."""
 
-    def __init__(
-        self,
-        config: SmartThingsConfig,
-        on_token_update: Any = None,
-    ):
+    def __init__(self, config: SmartThingsConfig):
         """Initialize the SmartThings device."""
         self.config = config
-        self._on_token_update = on_token_update
         self.events = AsyncIOEventEmitter()
 
-        tokens = config.oauth2_tokens
         self.client = SmartThingsClient(
             client_id=config.client_id,
             client_secret=config.client_secret,
-            access_token=tokens.access_token if tokens else None,
-            refresh_token=tokens.refresh_token if tokens else None,
-            expires_at=tokens.expires_at if tokens else None,
+            access_token=config.access_token or None,
+            refresh_token=config.refresh_token or None,
+            expires_at=config.expires_at or None,
         )
         self.client.set_token_refresh_callback(self._on_token_refresh)
 
@@ -59,6 +44,7 @@ class SmartThingsDevice:
         self._scenes_cache: list[dict] = []
         self._modes_cache: list[dict] = []
         self._current_mode: str | None = None
+        self._token_needs_save = False
 
     @property
     def identifier(self) -> str:
@@ -79,6 +65,11 @@ class SmartThingsDevice:
     def is_connected(self) -> bool:
         """Check if the device is connected."""
         return self._is_connected
+
+    @property
+    def token_needs_save(self) -> bool:
+        """Check if tokens need to be saved."""
+        return self._token_needs_save
 
     @property
     def devices(self) -> dict[str, dict]:
@@ -114,18 +105,19 @@ class SmartThingsDevice:
         self, access_token: str, refresh_token: str, expires_at: float
     ) -> None:
         """Handle token refresh callback."""
-        _LOG.debug("Tokens refreshed, updating configuration")
-        self.config.oauth2_tokens = OAuth2Tokens(
-            access_token=access_token,
-            refresh_token=refresh_token,
-            expires_at=expires_at,
-        )
-        if self._on_token_update:
-            await self._on_token_update(self.config)
+        _LOG.debug("Tokens refreshed, flagging for save")
+        self.config.access_token = access_token
+        self.config.refresh_token = refresh_token
+        self.config.expires_at = expires_at
+        self._token_needs_save = True
+
+    def mark_token_saved(self) -> None:
+        """Mark tokens as saved."""
+        self._token_needs_save = False
 
     async def connect(self) -> bool:
         """Connect to SmartThings API and start polling."""
-        _LOG.info("Connecting to SmartThings for location: %s", self.config.location_name)
+        _LOG.info("Connecting to SmartThings for location: %s", self.config.name)
 
         try:
             devices = await self.client.get_devices(self.location_id)

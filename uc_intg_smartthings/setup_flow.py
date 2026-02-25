@@ -224,7 +224,7 @@ class SmartThingsSetupFlow(BaseSetupFlow[SmartThingsConfig]):
     async def query_device(
         self, input_values: dict[str, Any]
     ) -> SmartThingsConfig | RequestUserInput:
-        """Create config from collected OAuth data."""
+        """Create config from collected OAuth data and fetch all devices."""
         location_id = self._pre_discovery_data.get("location_id", "")
 
         if not location_id or not self._temp_client:
@@ -237,6 +237,27 @@ class SmartThingsSetupFlow(BaseSetupFlow[SmartThingsConfig]):
         location_name = location.get("name", "SmartThings") if location else "SmartThings"
 
         identifier = f"st-{location_id[:8]}"
+
+        _LOG.info("Fetching devices for location: %s", location_name)
+        devices = await self._temp_client.get_devices(location_id)
+        _LOG.info("Found %d devices", len(devices))
+
+        rooms = await self._temp_client.get_rooms(location_id)
+        room_map = {r.get("roomId"): r.get("name", "Unknown") for r in rooms}
+
+        scenes = []
+        modes = []
+        try:
+            scenes = await self._temp_client.get_scenes(location_id)
+            _LOG.info("Found %d scenes", len(scenes))
+        except SmartThingsAPIError as e:
+            _LOG.warning("Could not fetch scenes: %s", e)
+
+        try:
+            modes = await self._temp_client.get_location_modes(location_id)
+            _LOG.info("Found %d modes", len(modes))
+        except SmartThingsAPIError as e:
+            _LOG.warning("Could not fetch modes: %s", e)
 
         config = SmartThingsConfig(
             identifier=identifier,
@@ -254,7 +275,26 @@ class SmartThingsSetupFlow(BaseSetupFlow[SmartThingsConfig]):
             include_covers=self._pre_discovery_data.get("include_covers", True),
             include_media_players=self._pre_discovery_data.get("include_media_players", True),
             include_buttons=True,
+            scenes=scenes,
+            modes=modes,
         )
+
+        for device in devices:
+            device_id = device.get("deviceId", "")
+            device_name = device.get("label") or device.get("name", "Unknown")
+            room_id = device.get("roomId")
+            room_name = room_map.get(room_id, "") if room_id else ""
+
+            caps = []
+            for component in device.get("components", []):
+                for cap in component.get("capabilities", []):
+                    cap_id = cap.get("id", "") if isinstance(cap, dict) else cap
+                    if cap_id:
+                        caps.append(cap_id)
+
+            config.add_device(device_id, device_name, room_name, caps)
+
+        _LOG.info("Added %d devices to config", len(config.devices))
 
         await self._temp_client.close()
         self._temp_client = None

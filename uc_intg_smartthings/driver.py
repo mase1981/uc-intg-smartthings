@@ -53,25 +53,22 @@ class SmartThingsDriver(BaseIntegrationDriver[SmartThingsDevice, SmartThingsConf
 
         return None
 
-    async def create_entities(
+    def create_entities(
         self, device_config: SmartThingsConfig, device: SmartThingsDevice
     ) -> list[Entity]:
-        """Create entity instances dynamically based on SmartThings devices."""
-        _LOG.info("Creating entities for %s", device_config.name)
+        """Create entity instances from config data (stored during setup)."""
+        _LOG.info("Creating entities for %s (%d devices in config)",
+                  device_config.name, len(device_config.devices))
 
-        if not device.is_connected:
-            _LOG.info("Device not connected, connecting now...")
-            await device.connect()
-
-        if not device.devices:
-            _LOG.error("No devices found after connection")
+        if not device_config.devices:
+            _LOG.warning("No devices in config - setup may have failed")
             return []
 
-        for st_device_id in device.devices.keys():
-            self._device_to_config[st_device_id] = device_config.identifier
+        for dev_info in device_config.devices:
+            self._device_to_config[dev_info.device_id] = device_config.identifier
         self._device_to_config[device_config.identifier] = device_config.identifier
 
-        factory = SmartThingsEntityFactory(device)
+        factory = SmartThingsEntityFactory(device, device_config)
         entities = factory.create_entities(
             include_lights=device_config.include_lights,
             include_switches=device_config.include_switches,

@@ -20,6 +20,7 @@ from ucapi.button import Button, Attributes as ButtonAttrs, States as ButtonStat
 from ucapi.select import Select, Attributes as SelectAttrs, States as SelectStates, Commands as SelectCommands
 
 from uc_intg_smartthings.device import SmartThingsDevice
+from uc_intg_smartthings.config import SmartThingsConfig, SmartThingsDeviceInfo
 
 _LOG = logging.getLogger(__name__)
 
@@ -121,10 +122,66 @@ def get_sensor_types(device: dict) -> list[str]:
 class SmartThingsEntityFactory:
     """Factory for creating SmartThings entities."""
 
-    def __init__(self, st_device: SmartThingsDevice):
+    def __init__(self, st_device: SmartThingsDevice, config: SmartThingsConfig):
         """Initialize the entity factory."""
         self.st_device = st_device
+        self.config = config
         self._entities: dict[str, Any] = {}
+
+    def _device_info_to_dict(self, dev_info: SmartThingsDeviceInfo) -> dict:
+        """Convert SmartThingsDeviceInfo to dict format for capability checks."""
+        return {
+            "deviceId": dev_info.device_id,
+            "label": dev_info.name,
+            "components": [{"capabilities": [{"id": c} for c in dev_info.capabilities]}],
+        }
+
+    def _detect_entity_type_from_caps(self, capabilities: list[str]) -> str | None:
+        """Detect entity type from capability list."""
+        caps_set = set(capabilities)
+
+        if caps_set & set(CAPABILITY_CLIMATE):
+            return "climate"
+        if caps_set & set(CAPABILITY_COVER):
+            return "cover"
+        if caps_set & set(CAPABILITY_MEDIA_PLAYER):
+            return "media_player"
+        if caps_set & set(CAPABILITY_LIGHT):
+            if not (caps_set & {"lock", "doorControl", "thermostat"}):
+                return "light"
+        if caps_set & set(CAPABILITY_BUTTON):
+            return "button"
+        if caps_set & set(CAPABILITY_SWITCH):
+            if not (caps_set & set(CAPABILITY_LIGHT + CAPABILITY_COVER + CAPABILITY_CLIMATE)):
+                return "switch"
+        return None
+
+    def _get_sensor_types_from_caps(self, capabilities: list[str]) -> list[str]:
+        """Get sensor types from capability list."""
+        sensors = []
+        if "temperatureMeasurement" in capabilities:
+            sensors.append("temperature")
+        if "relativeHumidityMeasurement" in capabilities:
+            sensors.append("humidity")
+        if "motionSensor" in capabilities:
+            sensors.append("motion")
+        if "contactSensor" in capabilities:
+            sensors.append("contact")
+        if "battery" in capabilities:
+            sensors.append("battery")
+        if "powerMeter" in capabilities:
+            sensors.append("power")
+        if "energyMeter" in capabilities:
+            sensors.append("energy")
+        if "presenceSensor" in capabilities:
+            sensors.append("presence")
+        if "illuminanceMeasurement" in capabilities:
+            sensors.append("illuminance")
+        return sensors
+
+    def _has_capability(self, capabilities: list[str], cap: str) -> bool:
+        """Check if capability is in list."""
+        return cap in capabilities
 
     def create_entities(
         self,
@@ -136,13 +193,15 @@ class SmartThingsEntityFactory:
         include_media_players: bool = True,
         include_buttons: bool = True,
     ) -> list[Any]:
-        """Create all entities for the configured devices."""
+        """Create all entities from config data (stored during setup)."""
         entities = []
 
-        for device_id, device in self.st_device.devices.items():
-            device_name = device.get("label") or device.get("name", "Unknown")
-            room_name = self.st_device.rooms.get(device_id)
-            entity_type = detect_entity_type(device)
+        for dev_info in self.config.devices:
+            device_id = dev_info.device_id
+            device_name = dev_info.name
+            room_name = dev_info.room
+            device = self._device_info_to_dict(dev_info)
+            entity_type = self._detect_entity_type_from_caps(dev_info.capabilities)
 
             _LOG.debug(
                 "Device %s (%s) detected as: %s",
@@ -188,7 +247,10 @@ class SmartThingsEntityFactory:
                     self._entities[entity.id] = entity
 
             if include_sensors:
-                sensor_entities = self._create_sensor_entities(device_id, device, device_name, room_name)
+                sensor_types = self._get_sensor_types_from_caps(dev_info.capabilities)
+                sensor_entities = self._create_sensor_entities_from_types(
+                    device_id, device_name, room_name, sensor_types
+                )
                 for sensor_entity in sensor_entities:
                     entities.append(sensor_entity)
                     self._entities[sensor_entity.id] = sensor_entity
@@ -373,12 +435,11 @@ class SmartThingsEntityFactory:
             area=area,
         )
 
-    def _create_sensor_entities(
-        self, device_id: str, device: dict, name: str, area: str | None
+    def _create_sensor_entities_from_types(
+        self, device_id: str, name: str, area: str | None, sensor_types: list[str]
     ) -> list[Sensor]:
-        """Create sensor entities for a device."""
+        """Create sensor entities from sensor type list."""
         sensors = []
-        sensor_types = get_sensor_types(device)
 
         for sensor_type in sensor_types:
             entity_id = f"sensor.st_{device_id}_{sensor_type}"
@@ -465,21 +526,21 @@ class SmartThingsEntityFactory:
 
     def _create_scene_select(self) -> Select | None:
         """Create a select entity for scenes."""
-        if not self.st_device.scenes:
+        if not self.config.scenes:
             return None
 
-        scene_names = [s.get("sceneName", "Unknown") for s in self.st_device.scenes]
+        scene_names = [s.get("sceneName", "Unknown") for s in self.config.scenes]
         if not scene_names:
             return None
 
-        entity_id = f"select.st_{self.st_device.identifier}_scenes"
+        entity_id = f"select.st_{self.config.identifier}_scenes"
 
         async def cmd_handler(entity: Select, cmd_id: str, params: dict | None) -> StatusCodes:
             return await self._handle_scene_select_command(cmd_id, params)
 
         return Select(
             entity_id,
-            f"{self.st_device.name} Scenes",
+            f"{self.config.name} Scenes",
             {
                 SelectAttrs.STATE: SelectStates.ON,
                 SelectAttrs.OPTIONS: scene_names,
@@ -490,22 +551,22 @@ class SmartThingsEntityFactory:
 
     def _create_mode_select(self) -> Select | None:
         """Create a select entity for location modes."""
-        if not self.st_device.modes:
+        if not self.config.modes:
             return None
 
-        mode_names = [m.get("name", "Unknown") for m in self.st_device.modes]
+        mode_names = [m.get("name", "Unknown") for m in self.config.modes]
         if not mode_names:
             return None
 
-        entity_id = f"select.st_{self.st_device.identifier}_modes"
-        current = self.st_device.current_mode or (mode_names[0] if mode_names else None)
+        entity_id = f"select.st_{self.config.identifier}_modes"
+        current = mode_names[0] if mode_names else None
 
         async def cmd_handler(entity: Select, cmd_id: str, params: dict | None) -> StatusCodes:
             return await self._handle_mode_select_command(cmd_id, params)
 
         return Select(
             entity_id,
-            f"{self.st_device.name} Mode",
+            f"{self.config.name} Mode",
             {
                 SelectAttrs.STATE: SelectStates.ON,
                 SelectAttrs.OPTIONS: mode_names,
@@ -692,7 +753,7 @@ class SmartThingsEntityFactory:
         if not selected:
             return StatusCodes.BAD_REQUEST
 
-        for scene in self.st_device.scenes:
+        for scene in self.config.scenes:
             if scene.get("sceneName") == selected:
                 scene_id = scene.get("sceneId")
                 if scene_id:
@@ -712,7 +773,7 @@ class SmartThingsEntityFactory:
         if not selected:
             return StatusCodes.BAD_REQUEST
 
-        for mode in self.st_device.modes:
+        for mode in self.config.modes:
             if mode.get("name") == selected:
                 mode_id = mode.get("id")
                 if mode_id:

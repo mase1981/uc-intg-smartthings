@@ -724,12 +724,20 @@ class SmartThingsEntityFactory:
                 device_id, "audioVolume", "setVolume", [volume]
             )
         elif cmd_id == media_player.Commands.VOLUME_UP:
+            current_vol = self.st_device.get_device_capability_status(
+                device_id, "audioVolume", "volume"
+            )
+            new_vol = min(100, (current_vol or 0) + 5)
             success = await self.st_device.execute_command(
-                device_id, "audioVolume", "volumeUp"
+                device_id, "audioVolume", "setVolume", [new_vol]
             )
         elif cmd_id == media_player.Commands.VOLUME_DOWN:
+            current_vol = self.st_device.get_device_capability_status(
+                device_id, "audioVolume", "volume"
+            )
+            new_vol = max(0, (current_vol or 0) - 5)
             success = await self.st_device.execute_command(
-                device_id, "audioVolume", "volumeDown"
+                device_id, "audioVolume", "setVolume", [new_vol]
             )
         elif cmd_id == media_player.Commands.MUTE_TOGGLE:
             current = self.st_device.get_device_capability_status(device_id, "audioMute", "mute")

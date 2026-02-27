@@ -68,6 +68,18 @@ class SmartThingsDevice:
         return self._is_connected
 
     @property
+    def state(self) -> dict | None:
+        """Get the device state (required by ucapi_framework)."""
+        if not self._is_connected:
+            return None
+        return {
+            "connected": self._is_connected,
+            "devices": len(self._devices_cache),
+            "modes": len(self._modes_cache),
+            "scenes": len(self._scenes_cache),
+        }
+
+    @property
     def token_needs_save(self) -> bool:
         """Check if tokens need to be saved."""
         return self._token_needs_save

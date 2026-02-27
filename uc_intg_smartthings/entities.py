@@ -34,8 +34,15 @@ CAPABILITY_SENSOR_CONTACT = ["contactSensor"]
 CAPABILITY_SENSOR_BATTERY = ["battery"]
 CAPABILITY_CLIMATE = ["thermostat", "thermostatMode", "thermostatCoolingSetpoint", "thermostatHeatingSetpoint"]
 CAPABILITY_COVER = ["windowShade", "doorControl", "garageDoorControl"]
-CAPABILITY_MEDIA_PLAYER = ["audioVolume", "mediaPlayback", "mediaInputSource"]
+CAPABILITY_MEDIA_PLAYER = ["audioVolume", "mediaPlayback", "mediaInputSource", "samsungvd.mediaInputSource", "samsungvd.audioInputSource"]
 CAPABILITY_BUTTON = ["button", "momentary"]
+
+CYCLING_ONLY_SOUNDBAR_MODELS = ["q950t", "hw-q70t", "q950a", "q990b"]
+
+SAMSUNG_SOUNDBAR_SOURCES = [
+    "HDMI1", "HDMI2", "HDMI3", "HDMI4", "USB", "aux", "bluetooth",
+    "optical", "coaxial", "network", "wifi"
+]
 
 
 def has_capability(device: dict, capability: str) -> bool:
@@ -182,6 +189,29 @@ class SmartThingsEntityFactory:
     def _has_capability(self, capabilities: list[str], cap: str) -> bool:
         """Check if capability is in list."""
         return cap in capabilities
+
+    def _is_cycling_only_soundbar(self, device_name: str) -> bool:
+        """Check if soundbar only supports cycling through inputs (no direct selection)."""
+        device_name_lower = device_name.lower()
+        return any(model in device_name_lower for model in CYCLING_ONLY_SOUNDBAR_MODELS)
+
+    def _is_samsung_soundbar(self, device_name: str, capabilities: list[str]) -> bool:
+        """Check if device is a Samsung soundbar."""
+        device_name_lower = device_name.lower()
+        caps_set = set(capabilities)
+        return (
+            "soundbar" in device_name_lower
+            or ("samsung" in device_name_lower and "q9" in device_name_lower)
+            or ("audioVolume" in caps_set and "mediaPlayback" not in caps_set and "switch" in caps_set)
+        )
+
+    def _has_input_source_capability(self, capabilities: list[str]) -> bool:
+        """Check if device has input source selection capability."""
+        return any(cap in capabilities for cap in [
+            "mediaInputSource",
+            "samsungvd.mediaInputSource",
+            "samsungvd.audioInputSource"
+        ])
 
     def create_entities(
         self,
@@ -391,6 +421,7 @@ class SmartThingsEntityFactory:
     ) -> MediaPlayer | None:
         """Create a media player entity."""
         features = [MPFeatures.ON_OFF]
+        caps = get_device_capabilities(device)
 
         if has_capability(device, "audioVolume"):
             features.extend([MPFeatures.VOLUME, MPFeatures.VOLUME_UP_DOWN, MPFeatures.MUTE])
@@ -398,10 +429,27 @@ class SmartThingsEntityFactory:
         if has_capability(device, "mediaPlayback"):
             features.extend([MPFeatures.PLAY_PAUSE, MPFeatures.STOP])
 
-        if has_capability(device, "mediaInputSource"):
+        has_input_cap = self._has_input_source_capability(caps)
+        is_cycling_only = self._is_cycling_only_soundbar(name)
+
+        if has_input_cap and not is_cycling_only:
             features.append(MPFeatures.SELECT_SOURCE)
+            _LOG.info("Added SELECT_SOURCE for %s (supports direct input selection)", name)
+        elif has_input_cap and is_cycling_only:
+            _LOG.info("Skipped SELECT_SOURCE for %s (cycling-only soundbar model)", name)
 
         entity_id = f"media_player.st_{device_id}"
+
+        initial_attrs = {
+            MPAttrs.STATE: MPStates.UNKNOWN,
+            MPAttrs.VOLUME: 0,
+            MPAttrs.MUTED: False,
+        }
+
+        if has_input_cap and not is_cycling_only:
+            if self._is_samsung_soundbar(name, caps):
+                initial_attrs[MPAttrs.SOURCE_LIST] = SAMSUNG_SOUNDBAR_SOURCES
+                _LOG.info("Added Samsung soundbar source list for %s", name)
 
         async def cmd_handler(entity: MediaPlayer, cmd_id: str, params: dict | None) -> StatusCodes:
             return await self._handle_media_player_command(device_id, cmd_id, params)
@@ -410,11 +458,7 @@ class SmartThingsEntityFactory:
             entity_id,
             name,
             features,
-            {
-                MPAttrs.STATE: MPStates.UNKNOWN,
-                MPAttrs.VOLUME: 0,
-                MPAttrs.MUTED: False,
-            },
+            initial_attrs,
             area=area,
             cmd_handler=cmd_handler,
         )
@@ -741,8 +785,13 @@ class SmartThingsEntityFactory:
             )
         elif cmd_id == media_player.Commands.MUTE_TOGGLE:
             current = self.st_device.get_device_capability_status(device_id, "audioMute", "mute")
-            cmd = "unmute" if current == "muted" else "mute"
-            success = await self.st_device.execute_command(device_id, "audioMute", cmd)
+            if current is not None:
+                cmd = "unmute" if current == "muted" else "mute"
+                success = await self.st_device.execute_command(device_id, "audioMute", cmd)
+            else:
+                current = self.st_device.get_device_capability_status(device_id, "audioVolume", "mute")
+                cmd = "unmute" if current == "muted" else "mute"
+                success = await self.st_device.execute_command(device_id, "audioVolume", cmd)
         elif cmd_id == media_player.Commands.PLAY_PAUSE:
             current = self.st_device.get_device_capability_status(
                 device_id, "mediaPlayback", "playbackStatus"
@@ -753,9 +802,20 @@ class SmartThingsEntityFactory:
             success = await self.st_device.execute_command(device_id, "mediaPlayback", "stop")
         elif cmd_id == media_player.Commands.SELECT_SOURCE:
             source = params.get("source", "") if params else ""
+            if source.lower() == "wifi":
+                source = "network"
+                _LOG.info("Converting 'wifi' to 'network' for Samsung soundbar")
             success = await self.st_device.execute_command(
                 device_id, "mediaInputSource", "setInputSource", [source]
             )
+            if not success:
+                success = await self.st_device.execute_command(
+                    device_id, "samsungvd.mediaInputSource", "setInputSource", [source]
+                )
+            if not success:
+                success = await self.st_device.execute_command(
+                    device_id, "samsungvd.audioInputSource", "setInputSource", [source]
+                )
         else:
             _LOG.warning("Unknown media player command: %s", cmd_id)
             return StatusCodes.NOT_IMPLEMENTED
@@ -923,8 +983,18 @@ class SmartThingsEntityFactory:
                     new_attrs[MPAttrs.VOLUME] = volume
 
                 mute = main.get("audioMute", {}).get("mute", {}).get("value")
+                if mute is None:
+                    mute = main.get("audioVolume", {}).get("mute", {}).get("value")
                 if mute is not None:
                     new_attrs[MPAttrs.MUTED] = mute == "muted"
+
+                source = main.get("mediaInputSource", {}).get("inputSource", {}).get("value")
+                if source is None:
+                    source = main.get("samsungvd.mediaInputSource", {}).get("inputSource", {}).get("value")
+                if source is None:
+                    source = main.get("samsungvd.audioInputSource", {}).get("inputSource", {}).get("value")
+                if source is not None:
+                    new_attrs[MPAttrs.SOURCE] = str(source)
 
             elif isinstance(entity, Sensor):
                 if "temperature" in entity_id:

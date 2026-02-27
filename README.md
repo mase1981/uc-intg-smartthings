@@ -1,160 +1,95 @@
 # SmartThings Integration for Unfolded Circle Remote 2/3
 
-Control your Samsung SmartThings smart home devices directly from your Unfolded Circle Remote 2 or Remote 3 with comprehensive device control, **real-time state monitoring**, and **OAuth2-based secure authentication**.
+Control your SmartThings devices seamlessly with your Unfolded Circle Remote 2 or Remote 3.
 
-![SmartThings](https://img.shields.io/badge/SmartThings-Smart%20Home-blue)
-[![GitHub Release](https://img.shields.io/github/v/release/mase1981/uc-intg-smartthings?style=flat-square)](https://github.com/mase1981/uc-intg-smartthings/releases)
-![License](https://img.shields.io/badge/license-MPL--2.0-blue?style=flat-square)
-[![GitHub issues](https://img.shields.io/github/issues/mase1981/uc-intg-smartthings?style=flat-square)](https://github.com/mase1981/uc-intg-smartthings/issues)
-[![Community Forum](https://img.shields.io/badge/community-forum-blue?style=flat-square)](https://unfolded.community/)
+![SmartThings](https://img.shields.io/badge/SmartThings-Cloud%20API-blue)
 [![Discord](https://badgen.net/discord/online-members/zGVYf58)](https://discord.gg/zGVYf58)
-![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/mase1981/uc-intg-smartthings/total?style=flat-square)
-[![Buy Me A Coffee](https://img.shields.io/badge/buy%20me%20a%20coffee-donate-yellow.svg?style=flat-square)](https://buymeacoffee.com/meirmiyara)
-[![PayPal](https://img.shields.io/badge/PayPal-donate-blue.svg?style=flat-square)](https://paypal.me/mmiyara)
-[![Github Sponsors](https://img.shields.io/badge/GitHub%20Sponsors-30363D?&logo=GitHub-Sponsors&logoColor=EA4AAA&style=flat-square)](https://github.com/sponsors/mase1981)
+![GitHub Release](https://img.shields.io/github/v/release/mase1981/uc-intg-smartthings)
+![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/mase1981/uc-intg-smartthings/total)
+![License](https://img.shields.io/badge/license-MPL--2.0-blue)
+[![Buy Me A Coffee](https://img.shields.io/badge/buy%20me%20a%20coffee-donate-yellow.svg)](https://buymeacoffee.com/meirmiyara)
+[![PayPal](https://img.shields.io/badge/PayPal-donate-blue.svg)](https://paypal.me/mmiyara)
+[![Github Sponsors](https://img.shields.io/badge/GitHub%20Sponsors-30363D?&logo=GitHub-Sponsors&logoColor=EA4AAA)](https://github.com/sponsors/mase1981/button)
 
 
 ## Features
 
-This integration provides comprehensive control of Samsung SmartThings devices through the official SmartThings REST API with OAuth2 authentication, delivering seamless integration with your Unfolded Circle Remote for complete smart home control.
+This integration provides comprehensive control of your SmartThings ecosystem directly from your Unfolded Circle Remote, supporting a wide range of device types with **OAuth2 authentication** for enhanced security and reliability.
 
----
-## Support Development
+## Important
 
-If you find this integration useful, consider supporting development:
+Due to the way SmartThings works, to make this integration free/Open Source without the mandatory requirement for a public facing SmartApp (webhooks) I had to use a Pull Method. The downside is that there will be a delay between state change and what the remote will reflect on the screen - This is a trade off to get this integration to work. At some point in the future when UC Team makes SmartThings integration baked into the remote firmware, they will most likely host and maintain their own SmartApp (webhooks) with WWST (Work With SmartThings) Certification.
 
-[![GitHub Sponsors](https://img.shields.io/badge/Sponsor-GitHub-pink?style=for-the-badge&logo=github)](https://github.com/sponsors/mase1981)
-[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-FFDD00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black)](https://www.buymeacoffee.com/meirmiyara)
-[![PayPal](https://img.shields.io/badge/PayPal-00457C?style=for-the-badge&logo=paypal&logoColor=white)](https://paypal.me/mmiyara)
+## What's New in Version 2.0.10
 
-Your support helps maintain this integration. Thank you!
-
----
+- **OAuth2 Authentication**: Enhanced security with proper OAuth2 flow
+- **SmartApp Integration**: Uses your own SmartApp for authentication
+- **Improved Reliability**: Better session management and reconnection handling
+- **Enhanced Setup**: Step-by-step SmartApp creation and configuration
+- **Optimized Performance**: 0.6s average response time with smart polling
+- **Fixed OAuth2 Scopes**: Resolved "invalid_scope" errors for reliable authentication
+- **Race Condition Fix**: Entities now persist properly after system reboots
 
 ### Supported Device Types
 
-| Device Type | Entity | Features |
-|-------------|--------|----------|
-| **Lights** | Light | On/Off, Brightness, Color Temperature, RGB Color |
-| **Switches** | Switch | On/Off |
-| **Thermostats** | Climate | Temperature, HVAC Mode, Fan Mode |
-| **Blinds/Shades** | Cover | Open/Close, Position |
-| **TVs/Speakers** | Media Player | On/Off, Volume, Mute, Source |
-| **Sensors** | Sensor | Temperature, Humidity, Motion, Contact, Battery |
-| **Scenes** | Select | Execute SmartThings Scenes |
-| **Modes** | Select | Set SmartThings Location Modes |
-| **Buttons** | Button | Press to execute scene |
+The integration automatically detects and categorizes your configured SmartThings devices
 
-### Light Control
+## Device Support Matrix
 
-- **On/Off** - Toggle light state
-- **Brightness** - Adjust brightness level (0-100%)
-- **Color Temperature** - Warm to cool white adjustment
-- **RGB Color** - Full color control for color-capable lights
-- **Real-time Updates** - Instant state feedback via polling
+| Device Type | Control Features | Status Updates | Examples |
+|-------------|-----------------|----------------|----------|
+| **Smart Lights** | On/Off, Dim, Color, Color Temp | Real-time | Philips Hue, LIFX, Sengled |
+| **Smart Switches** | On/Off, Toggle | Real-time | TP-Link Kasa, Leviton, GE |
+| **Smart Locks** | Lock/Unlock (as Switch) | Real-time | August, Yale, Schlage |
+| **Thermostats** | Temp, Mode, Fan | Real-time | Ecobee, Honeywell |
+| **Garage Doors** | Open/Close/Stop | Real-time | MyQ, Linear GoControl |
+| **Smart TVs** | Power, Volume | Real-time | Samsung, LG SmartThings |
+| **Sensors** | Status Monitoring | Real-time | Motion, Contact, Temp, Humidity, Battery |
+| **Buttons** | Press Actions | Event-based | SmartThings Button |
+| **Select (Scenes)** | Execute Scene | N/A | Good Night, Movie Time |
+| **Select (Modes)** | Switch Mode | Real-time | Home, Away, Night |
 
-### Switch Control
+#### Device Support Details
 
-- **On/Off** - Toggle switch state
-- **Real-time Updates** - Instant state feedback
+- **Lights**: *Supports: On/Off, Dimming, Color Control, Color Temperature, Toggle*
+- **Switches & Outlets**: *Supports: On/Off Control, Toggle, Power Monitoring (where available)*
+- **Security & Access**: *Note: Locks appear as switches for easy control (ON=Locked, OFF=Unlocked)*
+- **Climate Control**: *Supports: Temperature Control, Mode Setting (Heat/Cool/Auto), Current Temperature Display*
+- **Covers & Access Control**: *Supports: Open/Close/Stop Commands, Position Control (where supported)*
+- **Media & Entertainment**: *Supports: Power On/Off, Volume Control, Play/Pause (where supported)*
+- **Sensors & Monitoring**: *Provides: Real-time sensor readings, status monitoring, alerts*
+- **Buttons & Controls**: *Supports: Single Press, Long Press Actions (device dependent)*
 
-### Climate Control
+### Advanced Features
 
-- **Temperature** - Set target temperature
-- **HVAC Mode** - Heat, Cool, Auto, Off
-- **Fan Mode** - Auto, Low, Medium, High
-- **Current Temperature** - Real-time reading
-- **Humidity** - Current humidity level (if supported)
+#### **Smart Polling System**
+- **Adaptive Intervals**: Faster polling for recently changed devices
+- **Activity-Based**: High activity = 3sec intervals, Low activity = 20sec intervals
+- **Resource Efficient**: Minimizes API calls while maintaining responsiveness
+- **Batch Processing**: Optimized API usage with intelligent batching
 
-### Cover Control
-
-- **Open/Close** - Fully open or close
-- **Position** - Set specific position (0-100%)
-- **Stop** - Stop current movement
-
-### Media Player Control
-
-- **On/Off** - Power control
-- **Volume** - Volume level adjustment
-- **Mute** - Toggle mute state
-- **Source** - Input source selection
-- **Playback** - Play, Pause, Stop, Next, Previous
-
-### Sensor Monitoring
-
-| Sensor Type | Description |
-|-------------|-------------|
-| Temperature | Current temperature reading |
-| Humidity | Relative humidity percentage |
-| Motion | Motion detected / Clear |
-| Contact | Open / Closed state |
-| Battery | Battery level percentage |
-| Presence | Present / Away |
-| Power | Energy consumption |
-
-### Scenes & Modes (NEW in v3.0)
-
-- **Scenes** - Select entity to execute any SmartThings scene
-- **Modes** - Select entity to switch between location modes (Home, Away, Night, etc.)
-- **Button Entities** - Quick-press buttons for favorite scenes
-
-### Protocol Requirements
-
-- **Protocol**: SmartThings REST API v1
-- **Authentication**: OAuth2 (Authorization Code Flow)
-- **Connection**: Cloud-based with polling for state updates
-- **Polling Interval**: Configurable (default 10 seconds)
-- **Rate Limiting**: Built-in protection (8 requests per 10 seconds)
-
-### Network Requirements
-
-- **Internet Access** - Required for SmartThings cloud API
-- **HTTPS Protocol** - Secure OAuth2 authentication
-- **SmartThings Account** - Samsung account with SmartThings
-
----
+#### **OAuth2 Security**
+- **Secure Authentication**: Industry-standard OAuth2 flow
+- **Token Management**: Automatic token refresh and renewal
+- **SmartApp Integration**: Uses your own SmartApp for enhanced control
+- **Permission Control**: Fine-grained access control through SmartThings
 
 ## Prerequisites
 
-Before installing this integration, you need to create a SmartThings OAuth2 application:
-
-### Step 1: Create SmartThings Developer Account
-
-1. Go to [SmartThings Developer Workspace](https://smartthings.developer.samsung.com/workspace/projects)
-2. Sign in with your Samsung account
-3. Accept the developer terms if prompted
-
-### Step 2: Create OAuth2 Application
-
-1. Click **"New Project"**
-2. Select **"Consumer"** project type
-3. Fill in project details:
-   - **Project Name**: "Unfolded Circle Integration"
-   - **Description**: "Control SmartThings from UC Remote"
-4. Click **"Add App Credentials"**
-5. Configure OAuth settings:
-   - **OAuth Client ID**: Auto-generated (copy this)
-   - **OAuth Client Secret**: Click to reveal and copy
-   - **Redirect URI**: Add `https://httpbin.org/get`
-   - **Scopes**: Select:
-     - `r:devices:*` - Read devices
-     - `x:devices:*` - Execute device commands
-     - `r:locations:*` - Read locations
-     - `r:scenes:*` - Read scenes
-     - `x:scenes:*` - Execute scenes
-
-6. Save your **Client ID** and **Client Secret** securely
-
----
+- Unfolded Circle Remote 2 or Remote 3
+- SmartThings account with configured devices
+- SmartThings Hub or compatible devices
+- Internet connection for cloud API access
+- **Node.js and SmartThings CLI** (for SmartApp creation)
+- **Developer Account** on SmartThings Developer Portal
 
 ## Installation
-
+***NOTE:*** Before proceeding with installation, you must go through the configuration and create a SmartApp, this might be overwhelming task, but extremely easy guided steps - without it - this integration will not work.
 ### Option 1: Remote Web Interface (Recommended)
-
 1. Navigate to the [**Releases**](https://github.com/mase1981/uc-intg-smartthings/releases) page
 2. Download the latest `uc-intg-smartthings-<version>-aarch64.tar.gz` file
 3. Open your remote's web interface (`http://your-remote-ip`)
-4. Go to **Settings** > **Integrations** > **Add Integration**
+4. Go to **Settings** → **Integrations** → **Add Integration**
 5. Click **Upload** and select the downloaded `.tar.gz` file
 
 ### Option 2: Docker (Advanced Users)
@@ -182,151 +117,371 @@ services:
 
 **Docker Run:**
 ```bash
-docker run -d --name uc-smartthings --restart unless-stopped --network host \
-  -v smartthings-config:/app/config \
-  -e UC_CONFIG_HOME=/app/config \
-  -e UC_INTEGRATION_INTERFACE=0.0.0.0 \
-  -e UC_INTEGRATION_HTTP_PORT=9090 \
-  -e PYTHONPATH=/app \
-  ghcr.io/mase1981/uc-intg-smartthings:latest
+docker run -d --name uc-smartthings --restart unless-stopped --network host -v smartthings-config:/app/config -e UC_CONFIG_HOME=/app/config -e UC_INTEGRATION_INTERFACE=0.0.0.0 -e UC_INTEGRATION_HTTP_PORT=9090 -e PYTHONPATH=/app ghcr.io/mase1981/uc-intg-smartthings:latest
 ```
 
-## Configuration
+## Configuration - Complete Setup Guide
 
-### Step 1: Start Setup
+**Important**: Every user must create their own SmartApp with unique credentials. Never share SmartApp credentials for security reasons.
 
-1. After installation, go to **Settings** > **Integrations**
-2. The SmartThings integration should appear in **Available Integrations**
-3. Click **"Configure"** to begin setup
+### Step 1: Install SmartThings CLI
 
-### Step 2: Enter OAuth Credentials
+The SmartThings CLI is a **Node.js application** required to create and manage your SmartApp.
 
-1. Enter your **OAuth Client ID** from SmartThings Developer Workspace
-2. Enter your **OAuth Client Secret**
-3. Click **Next**
+***NOTE:*** You may use Windows Powershell or Mac terminal. Below are seperate instructions to help with whichever option you choose. Bottom line you need to install nodejs and smartthings CLI
 
-### Step 3: Authorize SmartThings
 
-1. You will see an authorization URL
-2. Open this URL in a web browser on your phone or computer
-3. Log in with your Samsung account
-4. Authorize the application
-5. You will be redirected to `https://httpbin.org/get?code=XXXXX`
-6. Copy the **code** parameter from the URL
-7. Paste the authorization code in the Remote setup
+#### **Windows Installation (Command Prompt/PowerShell):**
 
-### Step 4: Select Location and Device Types
+1. **Install Node.js:**
+   - Download from [nodejs.org](https://nodejs.org/) (LTS version recommended)
+   - Run the installer and follow prompts
+   - **Restart your computer** after installation
 
-1. Select your SmartThings **Location** from the dropdown
-2. Choose which device types to include:
-   - Lights
-   - Switches
-   - Sensors
-   - Climate
-   - Covers
-   - Media Players
-3. Click **Complete Setup**
+2. **Verify Node.js Installation:**
 
-### Step 5: Configure Entities
+   **In Command Prompt:**
+   ```cmd
+   node --version
+   npm --version
+   ```
 
-The integration will create entities for all compatible devices:
-- Lights, switches, climate, covers, media players
-- Sensors for temperature, humidity, motion, contact
-- Select entities for scenes and modes
-- Button entities for quick scene activation
+   **In PowerShell:**
+   ```powershell
+   node --version
+   npm --version
+   ```
 
----
+   **In Visual Studio Terminal (PowerShell):**
+   - Open Visual Studio: **View** → **Terminal** (or `Ctrl+``)
+   - Select **PowerShell** as terminal type
+   ```powershell
+   node --version
+   npm --version
+   ```
 
-## Using the Integration
+3. **Install SmartThings CLI:**
 
-### Light Entities
+   **In Command Prompt:**
+   ```cmd
+   npm install -g @smartthings/cli
+   ```
 
-Control smart lights with full feature support:
-- Toggle on/off from activities or directly
-- Adjust brightness with slider
-- Change color temperature
-- Set RGB color (if supported)
+   **In PowerShell/Visual Studio Terminal:**
+   ```powershell
+   npm install -g @smartthings/cli
+   ```
 
-### Climate Entities
+   **If you get execution policy errors in PowerShell:**
+   ```powershell
+   Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+   ```
 
-Control thermostats and HVAC:
-- Set target temperature
-- Switch between heat/cool/auto modes
-- Adjust fan speed
-- View current temperature and humidity
+4. **Verify CLI Installation:**
+   ```cmd
+   smartthings --version
+   ```
 
-### Sensor Entities
+#### **macOS Installation (Terminal):**
 
-Monitor environmental sensors:
-- Temperature sensors show current readings
-- Motion sensors show detected/clear state
-- Contact sensors show open/closed state
-- Battery sensors show charge level
+1. **Install Node.js:**
+   ```bash
+   # Using Homebrew (recommended)
+   brew install node
 
-### Scene Selection (NEW)
+   # Or download from nodejs.org
+   ```
 
-Execute SmartThings scenes via Select entity:
-- Shows all available scenes in your location
-- Choose a scene to execute it immediately
-- Perfect for "Good Night" or "Movie Time" scenes
+2. **Install SmartThings CLI:**
+   ```bash
+   npm install -g @smartthings/cli
+   ```
 
-### Mode Selection (NEW)
+3. **Verify CLI Installation:**
+   ```bash
+   smartthings --version
+   ```
 
-Switch between location modes via Select entity:
-- Home, Away, Night modes
-- Custom modes you've created
-- Affects all automations tied to modes
+#### **Linux Installation:**
 
----
+1. **Install Node.js:**
+   ```bash
+   # Ubuntu/Debian
+   curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash -
+   sudo apt-get install -y nodejs
 
-## Troubleshooting
+   # CentOS/RHEL/Fedora
+   curl -fsSL https://rpm.nodesource.com/setup_lts.x | sudo bash -
+   sudo dnf install nodejs npm
+   ```
 
-### Authorization Failed
+2. **Install SmartThings CLI:**
+   ```bash
+   sudo npm install -g @smartthings/cli
+   ```
 
-- Verify Client ID and Client Secret are correct
-- Ensure redirect URI is exactly `https://httpbin.org/get`
-- Check that all required scopes are selected
+3. **Verify CLI Installation:**
+   ```bash
+   smartthings --version
+   ```
 
-### Devices Not Appearing
+### Step 2: Create SmartApp with Correct OAuth2 Scopes
 
-- Verify devices are in the selected location
-- Check device type filters in setup
-- Some device types may not be supported yet
+⚠️ **CRITICAL**: The scopes you select here are essential for the integration to work. Using incorrect scopes will cause "invalid_scope" OAuth2 errors.
+1. **Start the SmartApp Creation Process:**
+   ```bash
+   smartthings apps:create
+   ```
+   <img width="548" height="83" alt="image" src="https://github.com/user-attachments/assets/23322c5d-a6b7-424e-93f5-2995caf8337b" />
 
-### Commands Not Working
+2. **Follow the prompts carefully:**
 
-- Check device is online in SmartThings app
-- Verify OAuth scopes include execute permissions
-- Check device supports the command capability
+***Note:*** During this step you will be asked to log into your SmartThings account. Complete the authentication - you'll see "Login successful" in the terminal.
 
-### Token Refresh Errors
+**Required Information:**
+- **Display name**: `UC Integration SmartThings`
+- **Description**: `Unfolded Circle Integration SmartApp for Remote Control`
+- **Icon image URL** (optional): ```SKIP BY PRESSING ENTER```
+- **Target URL** (SmartApp hosting): ```SKIP BY PRESSING ENTER```
+<img width="542" height="72" alt="image" src="https://github.com/user-attachments/assets/5d4a6c91-ab3c-408f-9e09-1cfe07a63393" />
 
-- Tokens are refreshed automatically before expiration
-- If persistent issues, re-run setup flow
-- Check SmartThings developer workspace for app status
+3. **⚠️ CRITICAL STEP - OAuth2 Scopes Selection:**
 
----
+When prompted for **"What permissions (scopes) does your app require?"**, you **MUST** select these exact scopes:
+
+**✅ REQUIRED SCOPES (Select ALL of these):**
+```
+✅ r:devices:*        (Read all devices)
+✅ w:devices:*        (Write to all devices)
+✅ x:devices:*        (Execute commands on all devices)
+✅ r:locations:*      (Read all locations)
+✅ w:locations:*      (Write to all locations)
+✅ x:locations:*      (Execute location commands)
+```
+
+**✅ OPTIONAL BUT RECOMMENDED:**
+```
+✅ r:scenes:*         (Read scenes - for future scene support)
+✅ x:scenes:*         (Execute scenes - for future scene support)
+```
+
+**❌ DO NOT SELECT SCOPES WITH $ SYMBOLS:**
+- ❌ `r:devices:$` (Will cause OAuth2 failures)
+- ❌ `w:devices:$` (Will cause OAuth2 failures)
+- ❌ `x:devices:$` (Will cause OAuth2 failures)
+<img width="547" height="256" alt="image" src="https://github.com/user-attachments/assets/54414413-51a6-4656-a8d2-48e7a5b15107" />
+
+4. **Redirect URIs Configuration:**
+
+   When prompted for **"What are your redirect URI(s)?"**, enter:
+   ```
+   https://httpbin.org/get
+   ```
+
+   **Important**: This exact redirect URI has been tested and confirmed working with the integration.
+<img width="518" height="69" alt="image" src="https://github.com/user-attachments/assets/7009a557-3da4-4eb1-a6d3-947602e08ab3" />
+
+5. **Save Your Credentials:**
+
+   After successful creation, you'll receive this critical information:
+
+   ```
+   App created successfully!
+
+   App ID: 12345678-1234-1234-1234-123456789abc
+   OAuth Client ID: abcdef01-2345-6789-abcd-ef0123456789
+   OAuth Client Secret: fedcba98-7654-3210-fedc-ba9876543210
+   ```
+
+   **⚠️ SECURITY WARNING**:
+   - **COPY AND SAVE** these credentials immediately
+   - **NEVER SHARE** these credentials publicly
+   - You'll need the **OAuth Client ID** and **OAuth Client Secret** for the integration setup
+<img width="519" height="328" alt="image" src="https://github.com/user-attachments/assets/6f74045a-4fc1-4c66-8ce8-ae9fe0c6c84c" />
+
+### Step 3: Verify SmartApp Creation
+
+1. **Open SmartThings mobile app**
+2. **Go to Menu** (≡)
+3. **Tap the gear icon** (⚙️) at top right
+4. **Select "Linked Services"**
+5. **Verify** you see `smartthings-cli` in the list
+<img width="371" height="254" alt="image" src="https://github.com/user-attachments/assets/ada8e32d-18d5-4a09-a8ee-8a4f2cb0cdf7" />
+
+### Step 4: Configure UC Remote Integration
+
+1. **Install the integration** on your UC Remote:
+   - Go to **Settings** → **Integrations**
+   - Upload the latest `.tar.gz` from GitHub releases
+   - Click on the integration to start setup
+
+2. **OAuth2 Setup Process:**
+
+#### **Step 4.1: Enter Client Credentials**
+   - **Client ID**: Paste your OAuth Client ID from Step 2
+   - **Client Secret**: Paste your OAuth Client Secret from Step 2
+   - Click **"Next"**
+
+#### **Step 4.2: Authorization Flow**
+   - Integration will display an authorization URL
+   - Browser should open automatically, if not copy the URL manually
+   - **Log in to SmartThings** if prompted
+   - **Select your HOME** from the dropdown
+   - **Click "Authorize"**
+   - You'll be redirected to `https://httpbin.org/get`
+
+   **Finding the Authorization Code:**
+   - Look for `"code": "your-authorization-code-here"` in the JSON response
+   - **Copy ONLY the code value** (typically 5-6 characters)
+   - Example: If you see `"code": "ABC12D"`, copy `ABC12D`
+   - **Paste the code** back into the integration setup
+
+#### **Step 4.3: Location & Device Selection**
+   - Integration will discover your SmartThings locations
+   - **Select the location** containing your devices
+   - **Choose device types** to include:
+     - ✅ **Lights** (Recommended)
+     - ✅ **Switches** (Recommended)
+     - ✅ **Climate** (Thermostats)
+     - ✅ **Covers** (Doors, Shades)
+     - ✅ **Media Players** (TVs, Speakers)
+     - ✅ **Buttons** (Smart Buttons)
+     - ⚠️ **Sensors** (Monitoring only - optional)
+
+#### **Step 4.4: Polling Configuration**
+   - **Base Interval**: 8-12 seconds (auto-optimized based on device count)
+   - Integration will recommend optimal settings
+
+#### **Step 4.5: Complete Setup**
+   - Click **"Complete Setup"**
+   - Integration will create entities for all discovered devices
+   - Entities will persist across system reboots
+
+### Step 5: Add Entities to Activities
+
+1. Go to **Activities** in your remote interface
+2. Edit or create an activity
+3. Add SmartThings entities from the **Available Entities** list
+4. Configure button mappings as desired
+5. Save your activity
+
+## Troubleshooting SmartApp Creation
+
+### OAuth2 Scope Issues (Most Common)
+
+#### **"invalid_scope" Error During Authorization**
+**Cause**: SmartApp was created with incorrect scopes (likely `$` scopes instead of `*` scopes)
+
+**Solution**:
+1. **Delete the current SmartApp**:
+   ```bash
+   smartthings apps:delete [YOUR_APP_ID]
+   ```
+2. **Create a NEW SmartApp** following Step 2 exactly
+3. **Ensure you select ONLY wildcard (`*`) scopes**
+4. **Verify no `$` scopes are selected**
+
+#### **"insufficient_scope" Error**
+**Cause**: Missing required scopes in SmartApp configuration
+
+**Solution**:
+1. Update your SmartApp scopes:
+   ```bash
+   smartthings apps:oauth:update [YOUR_APP_ID]
+   ```
+2. Add missing scopes: `r:devices:*`, `w:devices:*`, `x:devices:*`, `r:locations:*`
+
+### Common CLI Issues
+
+#### **"Command not found: smartthings"**
+```bash
+# Windows: Restart Command Prompt/PowerShell after Node.js installation
+# Verify npm global path
+npm config get prefix
+
+# Linux/macOS: Fix npm permissions
+mkdir ~/.npm-global
+npm config set prefix '~/.npm-global'
+export PATH=~/.npm-global/bin:$PATH
+
+# Add to your shell profile (.bashrc, .zshrc, etc.)
+echo 'export PATH=~/.npm-global/bin:$PATH' >> ~/.bashrc
+```
+
+#### **"Permission denied" errors**
+```bash
+# Windows: Run as Administrator
+# Linux/macOS: Fix npm permissions (see above) or use sudo for installation only
+sudo npm install -g @smartthings/cli
+```
+
+#### **CLI authentication issues**
+```bash
+# Clear CLI cache and re-authenticate
+smartthings logout
+smartthings login
+```
+
+### SmartApp Configuration Issues
+
+#### **"Invalid redirect URI" error**
+- Ensure you're using exactly: `https://httpbin.org/get`
+- Check for extra spaces or characters
+- Update the redirect URI:
+  ```bash
+  smartthings apps:oauth:update [YOUR_APP_ID]
+  ```
+
+#### **App installation fails**
+```bash
+# Check app status
+smartthings apps [YOUR_APP_ID]
+
+# Try reinstalling
+smartthings apps:uninstall [INSTALLATION_ID]
+smartthings apps:install [YOUR_APP_ID]
+```
+
+## Limitations
+
+### **SmartThings API Limitations**
+- **No Webhooks**: Third-party integrations cannot receive real-time push notifications
+- **Rate Limits**: 250 requests per minute per token (well managed by integration)
+- **Cloud Dependency**: Requires internet connection and SmartThings cloud service
+- **Device Support**: Limited to devices with SmartThings cloud integration
+
+### **Integration Limitations**
+- **Local Control**: Cannot control local-only devices (requires SmartThings cloud)
+- **Custom Capabilities**: Advanced custom device capabilities may not be supported
+- **Real-time Events**: 3-20 second delay for status updates (optimized by smart polling)
+- **Scenes**: Basic scene support (full scene management requires SmartThings app)
+
+## Security Notes
+
+- **Never share your SmartApp credentials** (Client ID/Secret)
+- **Keep authorization codes private** and use them immediately
+- **Each user must create their own SmartApp** for security
+- **Credentials are stored locally** on your UC Remote only
+
+## License
+
+This project is licensed under the Mozilla Public License 2.0 - see the [LICENSE](LICENSE) file for details.
 
 ## Credits
 
 - **Developer**: Meir Miyara
-- **Samsung SmartThings**: Smart home platform and API
-- **Unfolded Circle**: Remote 2/3 integration framework (ucapi)
-- **Community**: Testing and feedback from UC community
-
-## License
-
-This project is licensed under the Mozilla Public License 2.0 (MPL-2.0) - see LICENSE file for details.
+- **SmartThings API**: Samsung SmartThings Platform
+- **Unfolded Circle**: Remote 2/3 integration framework
+- **OAuth2 Implementation**: Enhanced security and reliability
 
 ## Support & Community
 
 - **GitHub Issues**: [Report bugs and request features](https://github.com/mase1981/uc-intg-smartthings/issues)
 - **UC Community Forum**: [General discussion and support](https://unfolded.community/)
-- **Developer**: [Meir Miyara](https://www.linkedin.com/in/meirmiyara)
-- **SmartThings Support**: [Official SmartThings Support](https://support.smartthings.com/)
+- **Developer**: [Meir Miyara](mailto:meir.miyara@gmail.com)
 
 ---
 
-**Made with love for the Unfolded Circle and SmartThings Communities**
+**Made with ❤️ for the Unfolded Circle Community**
 
 **Thank You**: Meir Miyara

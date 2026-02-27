@@ -25,7 +25,10 @@ REDIRECT_URI = "https://httpbin.org/get"
 OAUTH_SCOPES = [
     "r:devices:*",
     "w:devices:*",
+    "x:devices:*",
     "r:locations:*",
+    "w:locations:*",
+    "x:locations:*",
     "r:scenes:*",
     "x:scenes:*",
 ]

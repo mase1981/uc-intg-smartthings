@@ -1,6 +1,6 @@
 {
   "driver_id": "smartthings",
-  "version": "3.0.12",
+  "version": "3.0.13",
   "min_core_api": "0.22.0",
   "name": {
     "en": "SmartThings"

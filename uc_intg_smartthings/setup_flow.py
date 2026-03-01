@@ -90,14 +90,28 @@ class SmartThingsSetupFlow(BaseSetupFlow[SmartThingsConfig]):
             [
                 {
                     "id": "info",
-                    "label": {"en": "Authorization Required"},
+                    "label": {"en": "Step 1"},
                     "field": {
                         "label": {
                             "value": {
-                                "en": f"1. Open this URL in a browser:\n{auth_url}\n\n"
-                                f"2. Log in and authorize the application\n\n"
-                                f"3. After authorization, you will be redirected to:\n{REDIRECT_URI}\n\n"
-                                f"4. Copy the 'code' parameter from the URL and paste it below"
+                                "en": "Copy the URL below and open it in a browser:"
+                            }
+                        }
+                    },
+                },
+                {
+                    "id": "auth_url",
+                    "label": {"en": "Authorization URL"},
+                    "field": {"text": {"value": auth_url}},
+                },
+                {
+                    "id": "info2",
+                    "label": {"en": "Step 2"},
+                    "field": {
+                        "label": {
+                            "value": {
+                                "en": "Log in and authorize. After redirect, copy the 'code' "
+                                "parameter from the URL and paste it below:"
                             }
                         }
                     },

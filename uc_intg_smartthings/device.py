@@ -40,7 +40,6 @@ class SmartThingsDevice(PollingDevice):
         self._scenes_cache: list[dict] = []
         self._modes_cache: list[dict] = []
         self._current_mode: str | None = None
-        self._token_needs_save = False
 
     @property
     def identifier(self) -> str:
@@ -78,10 +77,6 @@ class SmartThingsDevice(PollingDevice):
         return self.config.location_id
 
     @property
-    def token_needs_save(self) -> bool:
-        return self._token_needs_save
-
-    @property
     def devices(self) -> dict[str, dict]:
         return self._devices_cache
 
@@ -108,14 +103,18 @@ class SmartThingsDevice(PollingDevice):
     async def _on_token_refresh(
         self, access_token: str, refresh_token: str, expires_at: float
     ) -> None:
-        _LOG.debug("Tokens refreshed, flagging for save")
-        self.config.access_token = access_token
-        self.config.refresh_token = refresh_token
-        self.config.expires_at = expires_at
-        self._token_needs_save = True
-
-    def mark_token_saved(self) -> None:
-        self._token_needs_save = False
+        _LOG.info("Tokens refreshed, persisting to config")
+        try:
+            self.update_config(
+                access_token=access_token,
+                refresh_token=refresh_token,
+                expires_at=expires_at,
+            )
+        except Exception as e:
+            _LOG.error("Failed to persist refreshed tokens: %s", e)
+            self.config.access_token = access_token
+            self.config.refresh_token = refresh_token
+            self.config.expires_at = expires_at
 
     async def establish_connection(self) -> None:
         """Connect to SmartThings API and populate caches."""
@@ -159,9 +158,6 @@ class SmartThingsDevice(PollingDevice):
     async def poll_device(self) -> None:
         """Called periodically by PollingDevice to refresh device status."""
         await self._poll_all_device_status()
-
-        if self._token_needs_save:
-            self.events.emit(DeviceEvents.UPDATE, "__token_save__", {})
 
     async def disconnect(self) -> None:
         """Disconnect from SmartThings."""

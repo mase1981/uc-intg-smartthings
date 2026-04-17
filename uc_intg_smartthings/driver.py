@@ -105,10 +105,6 @@ class SmartThingsDriver(BaseIntegrationDriver[SmartThingsDevice, SmartThingsConf
         if device_id is None or status is None:
             return
 
-        if device_id == "__token_save__":
-            self._handle_token_save()
-            return
-
         main = status.get("components", {}).get("main", {})
 
         self._update_light(device_id, main)
@@ -232,20 +228,6 @@ class SmartThingsDriver(BaseIntegrationDriver[SmartThingsDevice, SmartThingsConf
                 self.api.configured_entities.update_attributes(
                     entity_id, {SensorAttrs.STATE: SensorStates.ON, SensorAttrs.VALUE: value}
                 )
-
-    def _handle_token_save(self) -> None:
-        """Save updated tokens back to config."""
-        if not self.config_manager:
-            return
-
-        for config in self.config_manager.all():
-            if hasattr(config, "token_needs_save"):
-                continue
-            try:
-                self.config_manager.update(config)
-                _LOG.debug("Saved refreshed tokens for %s", config.identifier)
-            except Exception as e:
-                _LOG.error("Failed to save tokens: %s", e)
 
     def on_device_removed(
         self, device_or_config: SmartThingsDevice | SmartThingsConfig | None

@@ -17,6 +17,7 @@ class SmartThingsDeviceInfo:
     name: str
     room: str = ""
     capabilities: list[str] = field(default_factory=list)
+    input_source_cap: str = ""
 
 
 @dataclass

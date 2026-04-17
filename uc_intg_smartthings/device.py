@@ -1,5 +1,5 @@
 """
-SmartThings device wrapper with polling support.
+SmartThings device wrapper using PollingDevice from ucapi-framework.
 
 :copyright: (c) 2026 by Meir Miyara.
 :license: MPL-2.0, see LICENSE for more details.
@@ -9,8 +9,7 @@ import asyncio
 import logging
 from typing import Any
 
-from pyee.asyncio import AsyncIOEventEmitter
-from ucapi_framework.device import DeviceEvents
+from ucapi_framework.device import PollingDevice, DeviceEvents
 
 from uc_intg_smartthings.client import SmartThingsClient, SmartThingsAPIError
 from uc_intg_smartthings.config import SmartThingsConfig
@@ -18,27 +17,23 @@ from uc_intg_smartthings.config import SmartThingsConfig
 _LOG = logging.getLogger(__name__)
 
 
-class SmartThingsDevice:
-    """SmartThings device wrapper with polling support."""
+class SmartThingsDevice(PollingDevice):
+    """SmartThings device wrapper using framework PollingDevice."""
 
-    def __init__(self, config: SmartThingsConfig, **kwargs):
-        """Initialize the SmartThings device."""
-        _ = kwargs  # Accept and ignore extra framework args (loop, etc.)
-        self.config = config
-        self.events = AsyncIOEventEmitter()
+    def __init__(self, device_config: SmartThingsConfig, **kwargs):
+        super().__init__(device_config, poll_interval=device_config.polling_interval, **kwargs)
+        self.config = device_config
 
         self.client = SmartThingsClient(
-            client_id=config.client_id,
-            client_secret=config.client_secret,
-            access_token=config.access_token or None,
-            refresh_token=config.refresh_token or None,
-            expires_at=config.expires_at or None,
+            client_id=device_config.client_id,
+            client_secret=device_config.client_secret,
+            access_token=device_config.access_token or None,
+            refresh_token=device_config.refresh_token or None,
+            expires_at=device_config.expires_at or None,
         )
         self.client.set_token_refresh_callback(self._on_token_refresh)
 
         self._is_connected = False
-        self._polling_task: asyncio.Task | None = None
-        self._polling_interval = config.polling_interval
         self._devices_cache: dict[str, dict] = {}
         self._device_status_cache: dict[str, dict] = {}
         self._rooms_cache: dict[str, str] = {}
@@ -49,27 +44,26 @@ class SmartThingsDevice:
 
     @property
     def identifier(self) -> str:
-        """Get the device identifier."""
         return self.config.identifier
 
     @property
     def name(self) -> str:
-        """Get the device name."""
         return self.config.name
 
     @property
-    def location_id(self) -> str:
-        """Get the location ID."""
-        return self.config.location_id
+    def address(self) -> str:
+        return "SmartThings Cloud"
+
+    @property
+    def log_id(self) -> str:
+        return f"smartthings[{self.config.identifier}]"
 
     @property
     def is_connected(self) -> bool:
-        """Check if the device is connected."""
         return self._is_connected
 
     @property
     def state(self) -> dict | None:
-        """Get the device state (required by ucapi_framework)."""
         if not self._is_connected:
             return None
         return {
@@ -80,44 +74,40 @@ class SmartThingsDevice:
         }
 
     @property
+    def location_id(self) -> str:
+        return self.config.location_id
+
+    @property
     def token_needs_save(self) -> bool:
-        """Check if tokens need to be saved."""
         return self._token_needs_save
 
     @property
     def devices(self) -> dict[str, dict]:
-        """Get cached devices."""
         return self._devices_cache
 
     @property
     def device_status(self) -> dict[str, dict]:
-        """Get cached device status."""
         return self._device_status_cache
 
     @property
     def rooms(self) -> dict[str, str]:
-        """Get cached rooms (device_id -> room_name)."""
         return self._rooms_cache
 
     @property
     def scenes(self) -> list[dict]:
-        """Get cached scenes."""
         return self._scenes_cache
 
     @property
     def modes(self) -> list[dict]:
-        """Get cached modes."""
         return self._modes_cache
 
     @property
     def current_mode(self) -> str | None:
-        """Get the current mode."""
         return self._current_mode
 
     async def _on_token_refresh(
         self, access_token: str, refresh_token: str, expires_at: float
     ) -> None:
-        """Handle token refresh callback."""
         _LOG.debug("Tokens refreshed, flagging for save")
         self.config.access_token = access_token
         self.config.refresh_token = refresh_token
@@ -125,103 +115,63 @@ class SmartThingsDevice:
         self._token_needs_save = True
 
     def mark_token_saved(self) -> None:
-        """Mark tokens as saved."""
         self._token_needs_save = False
 
-    async def connect(self) -> bool:
-        """Connect to SmartThings API and start polling."""
+    async def establish_connection(self) -> None:
+        """Connect to SmartThings API and populate caches."""
         _LOG.info("Connecting to SmartThings for location: %s", self.config.name)
 
+        devices = await self.client.get_devices(self.location_id)
+        self._devices_cache = {d["deviceId"]: d for d in devices}
+        _LOG.info("Found %d devices in location", len(devices))
+
+        rooms = await self.client.get_rooms(self.location_id)
+        self._rooms_cache = {}
+        for room in rooms:
+            room_id = room.get("roomId")
+            room_name = room.get("name", "Unknown")
+            for device in devices:
+                if device.get("roomId") == room_id:
+                    self._rooms_cache[device["deviceId"]] = room_name
+
         try:
-            devices = await self.client.get_devices(self.location_id)
-            self._devices_cache = {d["deviceId"]: d for d in devices}
-            _LOG.info("Found %d devices in location", len(devices))
-
-            rooms = await self.client.get_rooms(self.location_id)
-            self._rooms_cache = {}
-            for room in rooms:
-                room_id = room.get("roomId")
-                room_name = room.get("name", "Unknown")
-                for device in devices:
-                    if device.get("roomId") == room_id:
-                        self._rooms_cache[device["deviceId"]] = room_name
-
-            try:
-                scenes = await self.client.get_scenes(self.location_id)
-                self._scenes_cache = scenes
-                _LOG.info("Found %d scenes", len(scenes))
-            except SmartThingsAPIError as e:
-                _LOG.warning("Could not fetch scenes: %s", e)
-                self._scenes_cache = []
-
-            try:
-                modes = await self.client.get_location_modes(self.location_id)
-                self._modes_cache = modes
-                _LOG.info("Found %d modes", len(modes))
-                current = await self.client.get_current_mode(self.location_id)
-                self._current_mode = current.get("name")
-            except SmartThingsAPIError as e:
-                _LOG.warning("Could not fetch modes: %s", e)
-                self._modes_cache = []
-
-            await self._poll_device_status()
-
-            self._is_connected = True
-            self.events.emit(DeviceEvents.CONNECTED, self.identifier)
-
-            self._start_polling()
-
-            return True
-
+            scenes = await self.client.get_scenes(self.location_id)
+            self._scenes_cache = scenes
+            _LOG.info("Found %d scenes", len(scenes))
         except SmartThingsAPIError as e:
-            _LOG.error("Failed to connect to SmartThings: %s", e)
-            self._is_connected = False
-            self.events.emit(DeviceEvents.ERROR, self.identifier, str(e))
-            return False
-        except Exception as e:
-            _LOG.error("Unexpected error connecting to SmartThings: %s", e)
-            self._is_connected = False
-            self.events.emit(DeviceEvents.ERROR, self.identifier, str(e))
-            return False
+            _LOG.warning("Could not fetch scenes: %s", e)
+            self._scenes_cache = []
+
+        try:
+            modes = await self.client.get_location_modes(self.location_id)
+            self._modes_cache = modes
+            _LOG.info("Found %d modes", len(modes))
+            current = await self.client.get_current_mode(self.location_id)
+            self._current_mode = current.get("name")
+        except SmartThingsAPIError as e:
+            _LOG.warning("Could not fetch modes: %s", e)
+            self._modes_cache = []
+
+        await self._poll_all_device_status()
+        self._is_connected = True
+        self.events.emit(DeviceEvents.CONNECTED, self.identifier)
+
+    async def poll_device(self) -> None:
+        """Called periodically by PollingDevice to refresh device status."""
+        await self._poll_all_device_status()
+
+        if self._token_needs_save:
+            self.events.emit(DeviceEvents.UPDATE, "__token_save__", {})
 
     async def disconnect(self) -> None:
         """Disconnect from SmartThings."""
         _LOG.info("Disconnecting from SmartThings")
-        self._stop_polling()
-        await self.client.close()
         self._is_connected = False
-        self.events.emit(DeviceEvents.DISCONNECTED, self.identifier)
+        await self.client.close()
+        await super().disconnect()
 
-    def _start_polling(self) -> None:
-        """Start the polling task."""
-        if self._polling_task is None or self._polling_task.done():
-            self._polling_task = asyncio.create_task(self._polling_loop())
-
-    def _stop_polling(self) -> None:
-        """Stop the polling task."""
-        if self._polling_task and not self._polling_task.done():
-            self._polling_task.cancel()
-            self._polling_task = None
-
-    async def _polling_loop(self) -> None:
-        """Main polling loop."""
-        _LOG.info("Starting polling loop (interval: %ds)", self._polling_interval)
-
-        while True:
-            try:
-                await asyncio.sleep(self._polling_interval)
-                await self._poll_device_status()
-            except asyncio.CancelledError:
-                _LOG.debug("Polling loop cancelled")
-                break
-            except Exception as e:
-                _LOG.error("Polling error: %s", e)
-                await asyncio.sleep(5)
-
-    async def _poll_device_status(self) -> None:
-        """Poll status for all devices."""
-        _LOG.debug("Polling device status...")
-
+    async def _poll_all_device_status(self) -> None:
+        """Poll status for all configured devices."""
         for device_id in list(self._devices_cache.keys()):
             if self.config.device_ids and device_id not in self.config.device_ids:
                 continue
@@ -246,30 +196,23 @@ class SmartThingsDevice:
         command: str,
         args: list | None = None,
     ) -> bool:
-        """Execute a command on a device."""
+        """Execute a command on a device. Only polls on success (Bug Fix #2)."""
         try:
             await self.client.execute_command(device_id, capability, command, args)
-            _LOG.debug(
-                "Executed command %s.%s on device %s", capability, command, device_id
-            )
-            await asyncio.sleep(0.5)
-            try:
-                status = await self.client.get_device_status(device_id)
-                self._device_status_cache[device_id] = status
-                self.events.emit(DeviceEvents.UPDATE, device_id, status)
-            except Exception as e:
-                _LOG.debug("Failed to get post-command status: %s", e)
-
-            return True
+            _LOG.debug("Executed command %s.%s on device %s", capability, command, device_id)
         except SmartThingsAPIError as e:
-            _LOG.error(
-                "Failed to execute command %s.%s on device %s: %s",
-                capability,
-                command,
-                device_id,
-                e,
-            )
+            _LOG.error("Failed to execute command %s.%s on device %s: %s", capability, command, device_id, e)
             return False
+
+        await asyncio.sleep(0.5)
+        try:
+            status = await self.client.get_device_status(device_id)
+            self._device_status_cache[device_id] = status
+            self.events.emit(DeviceEvents.UPDATE, device_id, status)
+        except Exception as e:
+            _LOG.debug("Failed to get post-command status: %s", e)
+
+        return True
 
     async def execute_scene(self, scene_id: str) -> bool:
         """Execute a scene."""

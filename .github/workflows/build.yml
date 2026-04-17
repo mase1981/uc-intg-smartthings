@@ -54,7 +54,15 @@ jobs:
                 --hidden-import uc_intg_${INTG_NAME}.config \
                 --hidden-import uc_intg_${INTG_NAME}.client \
                 --hidden-import uc_intg_${INTG_NAME}.setup_flow \
-                --hidden-import uc_intg_${INTG_NAME}.entities \
+                --hidden-import uc_intg_${INTG_NAME}.const \
+                --hidden-import uc_intg_${INTG_NAME}.light \
+                --hidden-import uc_intg_${INTG_NAME}.switch_entity \
+                --hidden-import uc_intg_${INTG_NAME}.climate \
+                --hidden-import uc_intg_${INTG_NAME}.cover \
+                --hidden-import uc_intg_${INTG_NAME}.media_player \
+                --hidden-import uc_intg_${INTG_NAME}.button_entity \
+                --hidden-import uc_intg_${INTG_NAME}.sensor \
+                --hidden-import uc_intg_${INTG_NAME}.select_entity \
                 --paths . \
                 uc_intg_${INTG_NAME}/__init__.py"
 

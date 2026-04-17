@@ -5,39 +5,38 @@ SmartThings Integration for Unfolded Circle Remote Two/3.
 :license: MPL-2.0, see LICENSE for more details.
 """
 
-import asyncio
 import json
-import logging
-import os
 from pathlib import Path
 
-from ucapi import DeviceStates
-from ucapi_framework import get_config_path, BaseConfigManager
-
-from uc_intg_smartthings.config import SmartThingsConfig
-from uc_intg_smartthings.driver import SmartThingsDriver
-from uc_intg_smartthings.setup_flow import SmartThingsSetupFlow
-
 try:
-    driver_path = Path(__file__).parent.parent / "driver.json"
-    with open(driver_path, "r", encoding="utf-8") as f:
-        driver_info = json.load(f)
-        __version__ = driver_info.get("version", "0.0.0")
+    _driver_path = Path(__file__).parent.parent / "driver.json"
+    with open(_driver_path, "r", encoding="utf-8") as _f:
+        __version__ = json.load(_f).get("version", "0.0.0")
 except (FileNotFoundError, json.JSONDecodeError, KeyError):
     __version__ = "0.0.0"
 
 __all__ = ["__version__"]
 
-_LOG = logging.getLogger(__name__)
-
 
 async def main():
     """Main entry point."""
+    import asyncio
+    import logging
+    import os
+
+    from ucapi import DeviceStates
+    from ucapi_framework import get_config_path, BaseConfigManager
+
+    from uc_intg_smartthings.config import SmartThingsConfig
+    from uc_intg_smartthings.driver import SmartThingsDriver
+    from uc_intg_smartthings.setup_flow import SmartThingsSetupFlow
+
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s | %(levelname)-8s | %(name)-20s | %(message)s",
     )
 
+    _LOG = logging.getLogger(__name__)
     _LOG.info("Starting SmartThings Integration v%s", __version__)
 
     try:
@@ -59,7 +58,7 @@ async def main():
         driver_path = os.path.join(os.path.dirname(__file__), "..", "driver.json")
         await driver.api.init(os.path.abspath(driver_path), setup_handler)
 
-        await driver.register_all_configured_devices(connect=False)
+        await driver.register_all_device_instances(connect=False)
 
         device_count = len(list(config_manager.all()))
         if device_count > 0:
@@ -79,4 +78,5 @@ async def main():
 
 
 if __name__ == "__main__":
+    import asyncio
     asyncio.run(main())

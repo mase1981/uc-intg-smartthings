@@ -46,7 +46,10 @@ def create_climate_entities(config: SmartThingsConfig, device: SmartThingsDevice
             features.append(Features.TARGET_TEMPERATURE)
             features.append(Features.COOL)
         if has_capability(dev_dict, "thermostatMode"):
-            features.append(Features.HVAC_MODES)
+            if Features.HEAT not in features:
+                features.append(Features.HEAT)
+            if Features.COOL not in features:
+                features.append(Features.COOL)
         if has_capability(dev_dict, "thermostatFanMode"):
             features.append(Features.FAN)
 

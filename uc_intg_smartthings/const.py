@@ -29,12 +29,24 @@ INPUT_SOURCE_CAPABILITIES = [
     "samsungvd.audioInputSource",
 ]
 
-CYCLING_ONLY_SOUNDBAR_MODELS = ["q950t", "hw-q70t", "q950a", "q990b", "q990f"]
+CYCLING_ONLY_SOUNDBAR_MODELS = ["q950t", "hw-q70t", "q950a"]
+
+SAMSUNG_EXECUTE_SOUNDBAR_MODELS = ["q990", "hw-q990"]
 
 SAMSUNG_SOUNDBAR_SOURCES = [
     "HDMI1", "HDMI2", "HDMI3", "HDMI4", "USB", "aux", "bluetooth",
     "optical", "coaxial", "network", "wifi",
 ]
+
+SAMSUNG_EXECUTE_SOURCE_MAP: dict[str, tuple[str, int]] = {
+    "HDMI1": ("HDMI1", 3),
+    "HDMI2": ("HDMI2", 21),
+    "TV ARC": ("TV ARC", 25),
+    "D-IN": ("D-IN", 1),
+    "bluetooth": ("BT", 5),
+    "wifi": ("Wi-Fi", 7),
+    "optical": ("OPTICAL", 2),
+}
 
 
 def has_capability(device: dict, capability: str) -> bool:
@@ -133,12 +145,15 @@ def get_sensor_types(capabilities: list[str]) -> list[str]:
 def detect_input_source_capability(name: str, caps: list[str]) -> str | None:
     """Detect the single correct input source capability for a device.
 
-    Returns the capability name to use for SELECT_SOURCE, or None if the device
-    is cycling-only or has no input source capability.
+    Returns the capability name to use for SELECT_SOURCE, "execute" for Samsung
+    soundbars requiring the execute API, or None if cycling-only/unsupported.
     """
     name_lower = name.lower()
     if any(model in name_lower for model in CYCLING_ONLY_SOUNDBAR_MODELS):
         return None
+
+    if any(model in name_lower for model in SAMSUNG_EXECUTE_SOUNDBAR_MODELS):
+        return "execute"
 
     for cap in INPUT_SOURCE_CAPABILITIES:
         if cap in caps:

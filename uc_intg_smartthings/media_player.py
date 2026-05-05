@@ -17,6 +17,7 @@ from ucapi import media_player, StatusCodes
 from ucapi.media_player import MediaPlayer, Features, Attributes, States
 
 from uc_intg_smartthings.const import (
+    SAMSUNG_EXECUTE_SOURCE_MAP,
     SAMSUNG_SOUNDBAR_SOURCES,
     detect_entity_type_from_caps,
     detect_input_source_capability,
@@ -65,7 +66,9 @@ def create_media_players(config: SmartThingsConfig, device: SmartThingsDevice) -
             features.append(Features.SELECT_SOURCE)
             _LOG.info("Device %s uses %s for input source", dev_info.name, input_cap)
 
-            if is_samsung_soundbar(dev_info.name, caps):
+            if input_cap == "execute":
+                initial_attrs[Attributes.SOURCE_LIST] = list(SAMSUNG_EXECUTE_SOURCE_MAP.keys())
+            elif is_samsung_soundbar(dev_info.name, caps):
                 initial_attrs[Attributes.SOURCE_LIST] = SAMSUNG_SOUNDBAR_SOURCES
         else:
             _LOG.info("No direct input source for %s (cycling-only or unsupported)", dev_info.name)
@@ -127,9 +130,34 @@ async def _handle_media_player_command(
         if not cap:
             return StatusCodes.NOT_IMPLEMENTED
         source = params.get("source", "") if params else ""
-        if source.lower() == "wifi":
-            source = "network"
-        success = await device.execute_command(device_id, cap, "setInputSource", [source])
+        if cap == "execute":
+            source_entry = SAMSUNG_EXECUTE_SOURCE_MAP.get(source)
+            if not source_entry:
+                _LOG.warning("Unknown source '%s' for execute soundbar %s", source, device_id)
+                return StatusCodes.BAD_REQUEST
+            connection_type, sb_mode = source_entry
+            payload = {
+                "x.com.samsung.networkaudio.soundFrom": {
+                    "groupName": "",
+                    "duid": "",
+                    "deviceType": 4,
+                    "sbMode": sb_mode,
+                    "di": "",
+                    "ip": "",
+                    "name": "External Device",
+                    "connectionType": connection_type,
+                    "mac": "",
+                    "status": 0,
+                }
+            }
+            success = await device.execute_command(
+                device_id, "execute", "execute",
+                ["/sec/networkaudio/soundFrom", payload],
+            )
+        else:
+            if source.lower() == "wifi":
+                source = "network"
+            success = await device.execute_command(device_id, cap, "setInputSource", [source])
     else:
         return StatusCodes.NOT_IMPLEMENTED
 

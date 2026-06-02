@@ -40,7 +40,6 @@ SAMSUNG_EXECUTE_SOUNDBAR_MODELS = ["q990", "hw-q990"]
 SAMSUNG_TV_ONLY_CAPABILITIES = [
     "samsungvd.ambient",
     "samsungvd.supportsPowerOnByOcf",
-    "samsungvd.remoteControl",
 ]
 
 SAMSUNG_SOUNDBAR_SOURCES = [

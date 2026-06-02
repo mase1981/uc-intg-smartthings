@@ -18,6 +18,7 @@ class SmartThingsDeviceInfo:
     room: str = ""
     capabilities: list[str] = field(default_factory=list)
     input_source_cap: str = ""
+    device_type: str = ""
 
 
 @dataclass
@@ -55,7 +56,14 @@ class SmartThingsConfig:
                 converted.append(device)
         self.devices = converted
 
-    def add_device(self, device_id: str, name: str, room: str = "", capabilities: list[str] | None = None) -> None:
+    def add_device(
+        self,
+        device_id: str,
+        name: str,
+        room: str = "",
+        capabilities: list[str] | None = None,
+        device_type: str = "",
+    ) -> None:
         """Add a device to the configuration."""
         for existing in self.devices:
             if existing.device_id == device_id:
@@ -63,10 +71,13 @@ class SmartThingsConfig:
                 existing.room = room
                 if capabilities:
                     existing.capabilities = capabilities
+                if device_type:
+                    existing.device_type = device_type
                 return
         self.devices.append(SmartThingsDeviceInfo(
             device_id=device_id,
             name=name,
             room=room,
             capabilities=capabilities or [],
+            device_type=device_type,
         ))

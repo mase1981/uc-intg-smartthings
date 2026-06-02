@@ -35,6 +35,7 @@ async def main():
         level=logging.INFO,
         format="%(asctime)s | %(levelname)-8s | %(name)-20s | %(message)s",
     )
+    logging.getLogger("websockets.server").setLevel(logging.CRITICAL)
 
     _LOG = logging.getLogger(__name__)
     _LOG.info("Starting SmartThings Integration v%s", __version__)

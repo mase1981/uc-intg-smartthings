@@ -296,6 +296,7 @@ class SmartThingsSetupFlow(BaseSetupFlow[SmartThingsConfig]):
         for device in devices:
             device_id = device.get("deviceId", "")
             device_name = device.get("label") or device.get("name", "Unknown")
+            device_type = device.get("name", "")
             room_id = device.get("roomId")
             room_name = room_map.get(room_id, "") if room_id else ""
 
@@ -306,7 +307,7 @@ class SmartThingsSetupFlow(BaseSetupFlow[SmartThingsConfig]):
                     if cap_id:
                         caps.append(cap_id)
 
-            config.add_device(device_id, device_name, room_name, caps)
+            config.add_device(device_id, device_name, room_name, caps, device_type)
 
         _LOG.info("Added %d devices to config", len(config.devices))
 

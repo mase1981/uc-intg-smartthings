@@ -53,7 +53,7 @@ def create_media_players(config: SmartThingsConfig, device: SmartThingsDevice) -
         if "mediaPlayback" in caps:
             features.extend([Features.PLAY_PAUSE, Features.STOP])
 
-        input_cap = detect_input_source_capability(dev_info.name, caps)
+        input_cap = detect_input_source_capability(dev_info.name, caps, dev_info.device_type)
 
         initial_attrs: dict = {
             Attributes.STATE: States.UNKNOWN,
@@ -64,14 +64,22 @@ def create_media_players(config: SmartThingsConfig, device: SmartThingsDevice) -
         if input_cap:
             _INPUT_SOURCE_CAP_MAP[device_id] = input_cap
             features.append(Features.SELECT_SOURCE)
-            _LOG.info("Device %s uses %s for input source", dev_info.name, input_cap)
 
             if input_cap == "execute":
                 initial_attrs[Attributes.SOURCE_LIST] = list(SAMSUNG_EXECUTE_SOURCE_MAP.keys())
-            elif is_samsung_soundbar(dev_info.name, caps):
+                _LOG.info("Media player '%s' [%s]: Samsung soundbar execute API, sources=%s",
+                          dev_info.name, device_id, initial_attrs[Attributes.SOURCE_LIST])
+            elif is_samsung_soundbar(dev_info.name, caps, dev_info.device_type):
                 initial_attrs[Attributes.SOURCE_LIST] = SAMSUNG_SOUNDBAR_SOURCES
+                _LOG.info("Media player '%s' [%s]: Samsung soundbar standard, cap=%s",
+                          dev_info.name, device_id, input_cap)
+            else:
+                _LOG.info("Media player '%s' [%s]: standard input source, cap=%s",
+                          dev_info.name, device_id, input_cap)
         else:
-            _LOG.info("No direct input source for %s (cycling-only or unsupported)", dev_info.name)
+            _LOG.info("Media player '%s' [%s]: no input source (cycling-only or unsupported), "
+                      "caps=%s, device_type='%s'",
+                      dev_info.name, device_id, caps, dev_info.device_type)
 
         entity_id = f"media_player.st_{device_id}"
 
@@ -127,15 +135,19 @@ async def _handle_media_player_command(
         success = await device.execute_command(device_id, "mediaPlayback", "stop")
     elif cmd_id == media_player.Commands.SELECT_SOURCE:
         cap = _INPUT_SOURCE_CAP_MAP.get(device_id)
-        if not cap:
-            return StatusCodes.NOT_IMPLEMENTED
         source = params.get("source", "") if params else ""
+        _LOG.info("SELECT_SOURCE: device=%s, source='%s', cap=%s", device_id, source, cap)
+        if not cap:
+            _LOG.warning("SELECT_SOURCE: no input source capability mapped for device %s", device_id)
+            return StatusCodes.NOT_IMPLEMENTED
         if cap == "execute":
             source_entry = SAMSUNG_EXECUTE_SOURCE_MAP.get(source)
             if not source_entry:
-                _LOG.warning("Unknown source '%s' for execute soundbar %s", source, device_id)
+                _LOG.warning("SELECT_SOURCE: unknown source '%s' for execute soundbar %s, available: %s",
+                             source, device_id, list(SAMSUNG_EXECUTE_SOURCE_MAP.keys()))
                 return StatusCodes.BAD_REQUEST
             connection_type, sb_mode = source_entry
+            _LOG.info("SELECT_SOURCE: executing soundFrom — connectionType=%s, sbMode=%d", connection_type, sb_mode)
             payload = {
                 "x.com.samsung.networkaudio.soundFrom": {
                     "groupName": "",
@@ -154,9 +166,11 @@ async def _handle_media_player_command(
                 device_id, "execute", "execute",
                 ["/sec/networkaudio/soundFrom", payload],
             )
+            _LOG.info("SELECT_SOURCE: execute soundFrom result=%s", "OK" if success else "FAILED")
         else:
             if source.lower() == "wifi":
                 source = "network"
+            _LOG.info("SELECT_SOURCE: using standard setInputSource cap=%s source=%s", cap, source)
             success = await device.execute_command(device_id, cap, "setInputSource", [source])
     else:
         return StatusCodes.NOT_IMPLEMENTED

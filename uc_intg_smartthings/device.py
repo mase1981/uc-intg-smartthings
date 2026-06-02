@@ -153,7 +153,6 @@ class SmartThingsDevice(PollingDevice):
 
         await self._poll_all_device_status()
         self._is_connected = True
-        self.events.emit(DeviceEvents.CONNECTED, self.identifier)
 
     async def poll_device(self) -> None:
         """Called periodically by PollingDevice to refresh device status."""

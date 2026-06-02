@@ -5,6 +5,10 @@ SmartThings constants and capability helpers.
 :license: MPL-2.0, see LICENSE for more details.
 """
 
+import logging
+
+_LOG = logging.getLogger(__name__)
+
 CAPABILITY_LIGHT = ["switchLevel", "colorControl", "colorTemperature"]
 CAPABILITY_SWITCH = ["switch"]
 CAPABILITY_SENSOR_TEMP = ["temperatureMeasurement"]
@@ -32,6 +36,12 @@ INPUT_SOURCE_CAPABILITIES = [
 CYCLING_ONLY_SOUNDBAR_MODELS = ["q950t", "hw-q70t", "q950a"]
 
 SAMSUNG_EXECUTE_SOUNDBAR_MODELS = ["q990", "hw-q990"]
+
+SAMSUNG_TV_ONLY_CAPABILITIES = [
+    "samsungvd.ambient",
+    "samsungvd.supportsPowerOnByOcf",
+    "samsungvd.remoteControl",
+]
 
 SAMSUNG_SOUNDBAR_SOURCES = [
     "HDMI1", "HDMI2", "HDMI3", "HDMI4", "USB", "aux", "bluetooth",
@@ -142,31 +152,92 @@ def get_sensor_types(capabilities: list[str]) -> list[str]:
     return sensors
 
 
-def detect_input_source_capability(name: str, caps: list[str]) -> str | None:
+def detect_input_source_capability(
+    name: str, caps: list[str], device_type: str = ""
+) -> str | None:
     """Detect the single correct input source capability for a device.
 
     Returns the capability name to use for SELECT_SOURCE, "execute" for Samsung
     soundbars requiring the execute API, or None if cycling-only/unsupported.
+
+    Samsung soundbars require the execute API with /sec/networkaudio/soundFrom.
+    Standard setInputSource does NOT work on Samsung soundbars even if they
+    report mediaInputSource in their capabilities.
+
+    Checks both user label (name) and manufacturer type name (device_type)
+    since users often rename devices.
     """
-    name_lower = name.lower()
-    if any(model in name_lower for model in CYCLING_ONLY_SOUNDBAR_MODELS):
+    names_lower = [name.lower()]
+    if device_type:
+        names_lower.append(device_type.lower())
+
+    _LOG.info(
+        "Input source detection for '%s' (type='%s'): caps=%s",
+        name, device_type, [c for c in caps if c in (
+            "execute", "audioVolume", "audioMute", "mediaPlayback", "switch",
+            "mediaInputSource", "samsungvd.mediaInputSource", "samsungvd.audioInputSource",
+            "samsungvd.ambient", "samsungvd.supportsPowerOnByOcf", "samsungvd.remoteControl",
+        )]
+    )
+
+    if any(model in n for n in names_lower for model in CYCLING_ONLY_SOUNDBAR_MODELS):
+        _LOG.info("  -> cycling-only model detected, no direct input source")
         return None
 
-    if any(model in name_lower for model in SAMSUNG_EXECUTE_SOUNDBAR_MODELS):
+    if any(model in n for n in names_lower for model in SAMSUNG_EXECUTE_SOUNDBAR_MODELS):
+        _LOG.info("  -> execute soundbar model detected by name match")
+        return "execute"
+
+    if "execute" in caps and is_samsung_soundbar(name, caps, device_type):
+        _LOG.info("  -> Samsung soundbar detected by capability heuristic, using execute API")
         return "execute"
 
     for cap in INPUT_SOURCE_CAPABILITIES:
         if cap in caps:
+            _LOG.info("  -> standard input source capability: %s", cap)
             return cap
+
+    _LOG.info("  -> no input source capability found")
     return None
 
 
-def is_samsung_soundbar(name: str, capabilities: list[str]) -> bool:
-    """Check if device is a Samsung soundbar."""
-    name_lower = name.lower()
+def is_samsung_soundbar(
+    name: str, capabilities: list[str], device_type: str = ""
+) -> bool:
+    """Check if device is a Samsung soundbar.
+
+    Uses three detection strategies:
+    1. Name/model patterns (user label or manufacturer type name)
+    2. Samsung audio device without TV capabilities (execute + audioVolume, no TV caps)
+    3. Audio-only heuristic (audioVolume + switch, no mediaPlayback)
+    """
     caps_set = set(capabilities)
-    return (
-        "soundbar" in name_lower
-        or ("samsung" in name_lower and "q9" in name_lower)
-        or ("audioVolume" in caps_set and "mediaPlayback" not in caps_set and "switch" in caps_set)
-    )
+
+    if caps_set & set(SAMSUNG_TV_ONLY_CAPABILITIES):
+        _LOG.debug("  is_samsung_soundbar('%s'): False (has TV-only caps)", name)
+        return False
+
+    names_lower = [name.lower()]
+    if device_type:
+        names_lower.append(device_type.lower())
+
+    soundbar_name_patterns = [
+        "soundbar", "sound bar", "hw-q", "hw-s", "hw-n", "hw-t",
+    ]
+    if any(p in n for n in names_lower for p in soundbar_name_patterns):
+        _LOG.debug("  is_samsung_soundbar('%s'): True (name pattern match)", name)
+        return True
+    if any("samsung" in n and any(m in n for m in ("q9", "q8")) for n in names_lower):
+        _LOG.debug("  is_samsung_soundbar('%s'): True (Samsung model match)", name)
+        return True
+
+    if "execute" in caps_set and "audioVolume" in caps_set:
+        _LOG.debug("  is_samsung_soundbar('%s'): True (execute + audioVolume)", name)
+        return True
+
+    if "audioVolume" in caps_set and "switch" in caps_set and "mediaPlayback" not in caps_set:
+        _LOG.debug("  is_samsung_soundbar('%s'): True (audio-only heuristic)", name)
+        return True
+
+    _LOG.debug("  is_samsung_soundbar('%s'): False (no match)", name)
+    return False

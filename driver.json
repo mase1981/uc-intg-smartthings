@@ -1,6 +1,6 @@
 {
   "driver_id": "smartthings",
-  "version": "4.0.2",
+  "version": "4.1.0",
   "min_core_api": "0.22.0",
   "name": {
     "en": "SmartThings"
@@ -14,7 +14,7 @@
     "email": "meir.miyara@gmail.com"
   },
   "home_page": "https://github.com/mase1981/uc-intg-smartthings",
-  "release_date": "2026-02-27",
+  "release_date": "2026-06-01",
   "setup_data_schema": {
     "title": {
       "en": "SmartThings Setup"
